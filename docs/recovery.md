@@ -40,7 +40,7 @@ On Linux with Docker installed:
 ./build.sh
 ```
 
-Pass a MoErgo ZMK branch or tag as the optional first argument to select a revision. The resulting `glove80.uf2` is written to the repository root. `build.bat` is the Windows counterpart. These scripts build from the checked-in `config/glove80.keymap` and `config/glove80.conf`.
+Pass a MoErgo ZMK branch or tag as the optional first argument to select a revision. The resulting `glove80.uf2` is written to the repository root. The script builds from the checked-in `config/glove80.keymap` and `config/glove80.conf`.
 
 ## Flash both halves
 
