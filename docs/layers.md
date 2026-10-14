@@ -76,7 +76,7 @@ Hold RH T2. This layer supplies direct modifiers on the left and navigation on t
 | F | Left Shift | P | Backspace |
 | G | Right Alt | N / M / , / . | Ctrl+Left / Ctrl+Right / Ctrl+Home / Ctrl+End |
 | Z / X / C | Escape / Tab / Shift+Tab | - | Escape |
-| V / B | Ctrl+R / Ctrl+L |  |  |
+| V / B | Ctrl+R / Ctrl+L | | |
 
 On the QWERTY letter row, Q/W/E/R invoke tmux Ctrl+A `p` (previous window), `n` (next window), `z` (zoom pane), and `w` (window chooser), respectively. These macros send the prefix and suffix as key events and do not type shell text. Neovim's normal-mode keys and Space leader remain on Base.
 
@@ -92,13 +92,13 @@ Hold RH T6. A macro types the listed text, including the final space. It does **
 
 | Base key | Text inserted |
 | --- | --- |
-| Q | `python -m pytest ` |
-| W / E / R / T | `make test ` / `make lint ` / `make check ` / `make fmt ` |
-| A | `make ci ` |
-| S / D | `git status ` / `git diff ` |
-| Y / U / I / O / P | `docker ps ` / `docker logs -f ` / `docker exec -it ` / `docker compose ` / `docker inspect ` |
-| H / J | `docker build -t ` / `docker run --rm ` |
-| K / L / Ö | `docker compose logs -f ` / `docker compose up ` / `docker compose config ` |
+| Q | `python -m pytest_` |
+| W / E / R / T | `make test_` / `make lint_` / `make check_` / `make fmt_` |
+| A | `make ci_` |
+| S / D | `git status_` / `git diff_` |
+| Y / U / I / O / P | `docker ps_` / `docker logs -f_` / `docker exec -it_` / `docker compose_` / `docker inspect_` |
+| H / J | `docker build -t_` / `docker run --rm_` |
+| K / L / Ö | `docker compose logs -f_` / `docker compose up_` / `docker compose config_` |
 | Z / X / C / V | F13 / F14 / F15 / F16 |
 
 F13–F16 are intended for the user's Neovim diagnostic, next-diagnostic, rename, and code-action mappings. Those mappings must be configured separately in Neovim. If they do not reach Neovim, check the terminal's key handling and the firmware's HID report configuration.
