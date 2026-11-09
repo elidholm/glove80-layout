@@ -1,0 +1,655 @@
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index cabd850..6ddbbe6 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -89,7 +89,8 @@ if (CONFIG_ZMK_HID_INDICATORS)
+   target_sources_ifdef(CONFIG_ZMK_RGB_UNDERGLOW app PRIVATE src/behaviors/behavior_underglow_indicators.c)
+ endif()
+ target_sources_ifdef(CONFIG_ZMK_RGB_UNDERGLOW app PRIVATE src/behaviors/behavior_underglow_battery.c)
+-target_sources_ifdef(CONFIG_ZMK_RGB_UNDERGLOW app PRIVATE src/events/underglow_color_changed.c)
++target_sources(app PRIVATE src/events/underglow_color_changed.c)
++target_sources(app PRIVATE src/behaviors/behavior_underglow_modifiers.c)
+ target_sources_ifdef(CONFIG_ZMK_BACKLIGHT app PRIVATE src/behaviors/behavior_backlight.c)
+ 
+ target_sources_ifdef(CONFIG_ZMK_BATTERY_REPORTING app PRIVATE src/events/battery_state_changed.c)
+diff --git a/app/dts/behaviors/ug_modifiers.dtsi b/app/dts/behaviors/ug_modifiers.dtsi
+new file mode 100644
+index 0000000..18d540c
+--- /dev/null
++++ b/app/dts/behaviors/ug_modifiers.dtsi
+@@ -0,0 +1,12 @@
++/*
++ * SPDX-License-Identifier: MIT
++ */
++
++/ {
++    behaviors {
++        ug_mod_sync: ug_mod_sync {
++            compatible = "zmk,behavior-underglow-modifiers-sync";
++            #binding-cells = <1>;
++        };
++    };
++};
+diff --git a/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers-sync.yaml b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers-sync.yaml
+new file mode 100644
+index 0000000..b1c5bd1
+--- /dev/null
++++ b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers-sync.yaml
+@@ -0,0 +1,3 @@
++description: Internal full-state modifier snapshot for split RGB
++compatible: "zmk,behavior-underglow-modifiers-sync"
++include: one_param.yaml
+diff --git a/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml
+new file mode 100644
+index 0000000..8a313de
+--- /dev/null
++++ b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml
+@@ -0,0 +1,7 @@
++description: RGB off/on colors selected by any active effective HID modifier in mods
++compatible: "zmk,behavior-underglow-modifiers"
++include: two_param.yaml
++properties:
++  mods:
++    type: int
++    required: true
+diff --git a/app/include/zmk/rgb_modifiers.h b/app/include/zmk/rgb_modifiers.h
+new file mode 100644
+index 0000000..cc21c12
+--- /dev/null
++++ b/app/include/zmk/rgb_modifiers.h
+@@ -0,0 +1,16 @@
++/*
++ * SPDX-License-Identifier: MIT
++ */
++
++#pragma once
++
++#include <zephyr/devicetree.h>
++#include <stdint.h>
++
++#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_underglow_modifiers)
++void zmk_rgb_modifiers_update(uint8_t modifiers);
++void zmk_rgb_modifiers_resync(void);
++#else
++static inline void zmk_rgb_modifiers_update(uint8_t modifiers) {}
++static inline void zmk_rgb_modifiers_resync(void) {}
++#endif
+diff --git a/app/src/behaviors/behavior_underglow_modifiers.c b/app/src/behaviors/behavior_underglow_modifiers.c
+new file mode 100644
+index 0000000..46e41ee
+--- /dev/null
++++ b/app/src/behaviors/behavior_underglow_modifiers.c
+@@ -0,0 +1,123 @@
++/*
++ * SPDX-License-Identifier: MIT
++ */
++
++#define DT_DRV_COMPAT zmk_behavior_underglow_modifiers
++
++#include <zephyr/device.h>
++#include <zephyr/sys/atomic.h>
++#include <zephyr/logging/log.h>
++#include <drivers/behavior.h>
++#include <zmk/behavior.h>
++#include <zmk/event_manager.h>
++#include <zmk/events/underglow_color_changed.h>
++#include <zmk/rgb_modifiers.h>
++
++LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
++
++#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
++
++#if IS_ENABLED(CONFIG_ZMK_SPLIT) && !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
++#include <zmk/events/split_peripheral_status_changed.h>
++#endif
++
++static atomic_t active_modifiers;
++
++struct underglow_modifiers_config {
++    uint8_t mods;
++};
++
++static void refresh_colors(struct k_work *work) {
++    raise_zmk_underglow_color_changed(
++        (struct zmk_underglow_color_changed){.layers = UINT32_MAX, .wakeup = true});
++}
++
++K_WORK_DEFINE(refresh_work, refresh_colors);
++
++static void apply_snapshot(uint8_t modifiers) {
++    if (atomic_set(&active_modifiers, modifiers) != modifiers) {
++        LOG_DBG("RGB modifiers: 0x%02x", modifiers);
++        k_work_submit(&refresh_work);
++    }
++}
++
++static int sync_pressed(struct zmk_behavior_binding *binding,
++                        struct zmk_behavior_binding_event event) {
++    apply_snapshot(binding->param1);
++    return 0;
++}
++
++static const struct behavior_driver_api sync_api = {
++    .binding_pressed = sync_pressed,
++    .locality = BEHAVIOR_LOCALITY_GLOBAL,
++};
++
++BEHAVIOR_DT_DEFINE(DT_NODELABEL(ug_mod_sync), NULL, NULL, NULL, NULL, POST_KERNEL,
++                   CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &sync_api);
++
++#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
++
++static atomic_t pending_modifiers;
++
++static void publish_snapshot(struct k_work *work) {
++    struct zmk_behavior_binding binding = {
++        .behavior_dev = DEVICE_DT_NAME(DT_NODELABEL(ug_mod_sync)),
++        .param1 = atomic_get(&pending_modifiers),
++    };
++    struct zmk_behavior_binding_event event = {.timestamp = k_uptime_get()};
++    zmk_behavior_invoke_binding(&binding, event, true);
++}
++
++K_WORK_DEFINE(publish_work, publish_snapshot);
++
++void zmk_rgb_modifiers_update(uint8_t modifiers) {
++    if (atomic_set(&pending_modifiers, modifiers) != modifiers) {
++        k_work_submit(&publish_work);
++    }
++}
++
++void zmk_rgb_modifiers_resync(void) { k_work_submit(&publish_work); }
++
++#else
++
++static int peripheral_status_changed(const zmk_event_t *eh) {
++    const struct zmk_split_peripheral_status_changed *ev =
++        as_zmk_split_peripheral_status_changed(eh);
++    if (!ev->connected) {
++        apply_snapshot(0);
++    }
++    return ZMK_EV_EVENT_BUBBLE;
++}
++
++ZMK_LISTENER(rgb_modifiers, peripheral_status_changed);
++ZMK_SUBSCRIPTION(rgb_modifiers, zmk_split_peripheral_status_changed);
++
++#endif
++
++static int modifier_color(struct zmk_behavior_binding *binding,
++                          struct zmk_behavior_binding_event event) {
++    const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
++    const struct underglow_modifiers_config *config = dev->config;
++    int color = (atomic_get(&active_modifiers) & config->mods) ? binding->param2 : binding->param1;
++    LOG_DBG("RGB group 0x%02x: 0x%06x", config->mods, color);
++    return color;
++}
++
++static int color_released(struct zmk_behavior_binding *binding,
++                          struct zmk_behavior_binding_event event) {
++    return 0;
++}
++
++static const struct behavior_driver_api color_api = {
++    .binding_pressed = modifier_color,
++    .binding_released = color_released,
++};
++
++#define MOD_INST(n)                                                                                 \
++    static const struct underglow_modifiers_config config_##n = {.mods = DT_INST_PROP(n, mods)};    \
++    BEHAVIOR_DT_INST_DEFINE(n, NULL, NULL, NULL, &config_##n, POST_KERNEL,                           \
++                            CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &color_api);
++
++DT_INST_FOREACH_STATUS_OKAY(MOD_INST)
++
++#endif
+diff --git a/app/src/hid.c b/app/src/hid.c
+index cf5a557..19f15e8 100644
+--- a/app/src/hid.c
++++ b/app/src/hid.c
+@@ -9,6 +9,7 @@
+ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+ 
+ #include <zmk/hid.h>
++#include <zmk/rgb_modifiers.h>
+ #include <dt-bindings/zmk/modifiers.h>
+ 
+ static struct zmk_hid_keyboard_report keyboard_report = {
+@@ -43,6 +44,7 @@ static zmk_mod_flags_t masked_modifiers = 0;
+ #define SET_MODIFIERS(mods)                                                                        \
+     {                                                                                              \
+         keyboard_report.body.modifiers = (mods & ~masked_modifiers) | implicit_modifiers;          \
++        zmk_rgb_modifiers_update(keyboard_report.body.modifiers);                                  \
+         LOG_DBG("Modifiers set to 0x%02X", keyboard_report.body.modifiers);                        \
+     }
+ 
+@@ -316,6 +318,7 @@ bool zmk_hid_keyboard_is_pressed(zmk_key_t code) {
+ 
+ void zmk_hid_keyboard_clear(void) {
+     memset(&keyboard_report.body, 0, sizeof(keyboard_report.body));
++    zmk_rgb_modifiers_update(0);
+ }
+ 
+ int zmk_hid_consumer_press(zmk_key_t code) {
+diff --git a/app/src/rgb_underglow.c b/app/src/rgb_underglow.c
+index 3e7492c..42d95bd 100644
+--- a/app/src/rgb_underglow.c
++++ b/app/src/rgb_underglow.c
+@@ -643,6 +643,11 @@ int zmk_rgb_underglow_on(void) {
+     }
+ #endif
+     zmk_rgb_underglow_transient_on();
++#if IS_ENABLED(UNDERGLOW_LAYER_ENABLED)
++    if (state.layer_enabled) {
++        zmk_rgb_underglow_set_layer(rgb_underglow_top_layer(), true);
++    }
++#endif
+     return zmk_rgb_underglow_save_state();
+ }
+ 
+@@ -705,6 +710,9 @@ int zmk_rgb_underglow_select_effect(int effect) {
+     state.animation_step = 0;
+ #if IS_ENABLED(UNDERGLOW_LAYER_ENABLED)
+     state.layer_enabled = (effect == UNDERGLOW_EFFECT_LAYER_INDICATORS);
++    if (state.layer_enabled && state.on) {
++        zmk_rgb_underglow_set_layer(rgb_underglow_top_layer(), true);
++    }
+ #endif
+     return zmk_rgb_underglow_save_state();
+ }
+@@ -1041,7 +1049,7 @@ static int rgb_underglow_event_listener(const zmk_event_t *eh) {
+         const struct zmk_split_peripheral_layer_changed *ev =
+             as_zmk_split_peripheral_layer_changed(eh);
+         LOG_DBG("zmk_split_peripheral_layer_changed: %08x", ev->layers);
+-#if !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
++#if IS_ENABLED(CONFIG_ZMK_SPLIT) && !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+         set_peripheral_layers_state(ev->layers);
+ #endif
+         uint8_t layer = rgb_underglow_top_layer();
+diff --git a/app/src/rgb_underglow_layer.c b/app/src/rgb_underglow_layer.c
+index 6751b8c..ace1074 100644
+--- a/app/src/rgb_underglow_layer.c
++++ b/app/src/rgb_underglow_layer.c
+@@ -79,7 +79,7 @@ uint8_t rgb_underglow_top_layer_with_state(uint32_t state_to_test) {
+ }
+ 
+ uint32_t rgb_underglow_layers_state(void) {
+-#if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
++#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+     return zmk_keymap_layer_state();
+ #else
+     return peripheral_layers_state();
+@@ -87,7 +87,7 @@ uint32_t rgb_underglow_layers_state(void) {
+ }
+ 
+ uint8_t rgb_underglow_top_layer(void) {
+-#if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
++#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+     return zmk_keymap_highest_layer_active();
+ #else
+     return peripheral_highest_layer_active();
+diff --git a/app/src/split/bluetooth/central.c b/app/src/split/bluetooth/central.c
+index ede95d3..34010b4 100644
+--- a/app/src/split/bluetooth/central.c
++++ b/app/src/split/bluetooth/central.c
+@@ -22,6 +22,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+ #include <zmk/stdlib.h>
+ #include <zmk/ble.h>
+ #include <zmk/behavior.h>
++#include <zmk/rgb_modifiers.h>
+ #include <zmk/sensors.h>
+ #include <zmk/split/transport/central.h>
+ #include <zmk/split/bluetooth/uuid.h>
+@@ -717,6 +718,9 @@ static uint8_t split_central_chrc_discovery_func(struct bt_conn *conn,
+ 
+     subscribed = subscribed && slot->update_layers_handle;
+ 
++    if (subscribed) {
++        zmk_rgb_modifiers_resync();
++    }
+     return subscribed ? BT_GATT_ITER_STOP : BT_GATT_ITER_CONTINUE;
+ }
+ 
+diff --git a/app/tests/modifiers/rgb-renderer/events.patterns b/app/tests/modifiers/rgb-renderer/events.patterns
+new file mode 100644
+index 0000000..a7bff86
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/events.patterns
+@@ -0,0 +1 @@
++s/.*LED frame: /frame: /p
+diff --git a/app/tests/modifiers/rgb-renderer/keycode_events.snapshot b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
+new file mode 100644
+index 0000000..07ddc83
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
+@@ -0,0 +1,12 @@
++frame: 006464 000000
++frame: 000000 000000
++frame: 000000 640064
++frame: 000000 000000
++frame: 006464 000000
++frame: 000000 000000
++frame: 006464 000000
++frame: 000000 000000
++frame: 006464 000000
++frame: 000000 000000
++frame: 000000 640064
++frame: 000000 000000
+diff --git a/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt b/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt
+new file mode 100644
+index 0000000..5192fbe
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt
+@@ -0,0 +1,2 @@
++target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/led_strip.c)
++target_sources(app PRIVATE ${CMAKE_SOURCE_DIR}/src/events/split_peripheral_layer_changed.c)
+diff --git a/app/tests/modifiers/rgb-renderer/mock/dts/bindings/test,rgb-strip.yaml b/app/tests/modifiers/rgb-renderer/mock/dts/bindings/test,rgb-strip.yaml
+new file mode 100644
+index 0000000..0fc457f
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/mock/dts/bindings/test,rgb-strip.yaml
+@@ -0,0 +1,7 @@
++description: Native test LED strip recording changed frames
++compatible: "test,rgb-strip"
++include: base.yaml
++properties:
++  chain-length:
++    type: int
++    required: true
+diff --git a/app/tests/modifiers/rgb-renderer/mock/led_strip.c b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
+new file mode 100644
+index 0000000..ee6fdcf
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
+@@ -0,0 +1,21 @@
++#include <zephyr/device.h>
++#include <zephyr/drivers/led_strip.h>
++#include <zephyr/logging/log.h>
++
++LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
++
++static int update_rgb(const struct device *dev, struct led_rgb *pixels, size_t count) {
++    static struct led_rgb previous[2];
++    if (memcmp(previous, pixels, sizeof(previous)) != 0) {
++        memcpy(previous, pixels, sizeof(previous));
++        LOG_DBG("LED frame: %02x%02x%02x %02x%02x%02x",
++                pixels[0].r, pixels[0].g, pixels[0].b,
++                pixels[1].r, pixels[1].g, pixels[1].b);
++    }
++    return 0;
++}
++
++static const struct led_strip_driver_api api = {.update_rgb = update_rgb};
++
++DEVICE_DT_DEFINE(DT_NODELABEL(test_led), NULL, NULL, NULL, NULL, POST_KERNEL,
++                 CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &api);
+diff --git a/app/tests/modifiers/rgb-renderer/mock/zephyr/module.yml b/app/tests/modifiers/rgb-renderer/mock/zephyr/module.yml
+new file mode 100644
+index 0000000..a1161c7
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/mock/zephyr/module.yml
+@@ -0,0 +1,4 @@
++build:
++  cmake: .
++  settings:
++    dts_root: .
+diff --git a/app/tests/modifiers/rgb-renderer/native_posix_64.conf b/app/tests/modifiers/rgb-renderer/native_posix_64.conf
+new file mode 100644
+index 0000000..cef6422
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/native_posix_64.conf
+@@ -0,0 +1,7 @@
++CONFIG_ZMK_RGB_UNDERGLOW=y
++CONFIG_GPIO=y
++CONFIG_GPIO_EMUL=y
++CONFIG_EXPERIMENTAL_RGB_LAYER=y
++CONFIG_ZMK_RGB_UNDERGLOW_ON_START=n
++CONFIG_ZMK_RGB_UNDERGLOW_BRT_START=100
++CONFIG_ZMK_RGB_UNDERGLOW_BRT_MAX=100
+diff --git a/app/tests/modifiers/rgb-renderer/native_posix_64.keymap b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
+new file mode 100644
+index 0000000..e631782
+--- /dev/null
++++ b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
+@@ -0,0 +1,107 @@
++#include <dt-bindings/zmk/keys.h>
++#include <dt-bindings/zmk/kscan_mock.h>
++#include <dt-bindings/zmk/rgb.h>
++#include <dt-bindings/gpio/gpio.h>
++#include <behaviors.dtsi>
++#include <behaviors/ug_modifiers.dtsi>
++
++/delete-node/ &ug_b2;
++/delete-node/ &ug_b4;
++/delete-node/ &ug_b6;
++/delete-node/ &ug_b8;
++
++/ {
++    chosen {
++        zmk,underglow = &test_led;
++    };
++    test_gpio: gpio@0 {
++        compatible = "zephyr,gpio-emul";
++        reg = <0 4>;
++        gpio-controller;
++        #gpio-cells = <2>;
++        ngpios = <1>;
++    };
++    ext_power {
++        compatible = "zmk,ext-power-generic";
++        control-gpios = <&test_gpio 0 GPIO_ACTIVE_HIGH>;
++        init-delay-ms = <0>;
++    };
++    test_led: test_led {
++        compatible = "test,rgb-strip";
++        chain-length = <2>;
++    };
++    behaviors {
++        test_shift: test_shift {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <(MOD_LSFT | MOD_RSFT)>;
++        };
++        test_altgr: test_altgr {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <MOD_RALT>;
++        };
++        test_morph: test_morph {
++            compatible = "zmk,behavior-mod-morph";
++            #binding-cells = <0>;
++            bindings = <&kp A>, <&kp B>;
++            mods = <MOD_LSFT>;
++        };
++    };
++    keymap {
++        compatible = "zmk,keymap";
++        base {
++            bindings = <
++                &kp LSHFT &kp RALT &rgb_ug RGB_EFS_CMD 4 &rgb_ug RGB_TOG
++                &kp LS(A) &test_morph &mo 1 &none
++            >;
++        };
++        higher {
++            bindings = <
++                &trans &trans &trans &trans
++                &trans &trans &trans &trans
++            >;
++        };
++    };
++    underglow-layer {
++        compatible = "zmk,underglow-layer";
++        pixel-lookup = <0 1>;
++        base {
++            layer-id = <0>;
++            fade-delay = <(-1)>;
++            bindings = <
++                &test_shift 0 0x00FFFF &test_altgr 0 0xFF00FF &ug 0 &ug 0
++                &ug 0 &ug 0 &ug 0 &ug 0
++            >;
++        };
++        higher {
++            layer-id = <1>;
++            fade-delay = <(-1)>;
++            bindings = <
++                &test_shift 0 0x00FFFF &test_altgr 0 0xFF00FF &ug 0 &ug 0
++                &ug 0 &ug 0 &ug 0 &ug 0
++            >;
++        };
++    };
++};
++
++&kscan {
++    rows = <2>;
++    columns = <4>;
++    events = <
++        ZMK_MOCK_PRESS(0,2,30) ZMK_MOCK_RELEASE(0,2,30)
++        ZMK_MOCK_PRESS(0,0,30)
++        ZMK_MOCK_PRESS(0,3,30) ZMK_MOCK_RELEASE(0,3,30)
++        ZMK_MOCK_PRESS(0,1,30)
++        ZMK_MOCK_RELEASE(0,0,30)
++        ZMK_MOCK_PRESS(0,3,30) ZMK_MOCK_RELEASE(0,3,30)
++        ZMK_MOCK_RELEASE(0,1,30)
++        ZMK_MOCK_PRESS(1,0,30) ZMK_MOCK_RELEASE(1,0,30)
++        ZMK_MOCK_PRESS(0,0,30)
++        ZMK_MOCK_PRESS(1,1,30) ZMK_MOCK_RELEASE(1,1,30)
++        ZMK_MOCK_RELEASE(0,0,30)
++        ZMK_MOCK_PRESS(1,2,30)
++        ZMK_MOCK_PRESS(0,1,30) ZMK_MOCK_RELEASE(0,1,30)
++        ZMK_MOCK_RELEASE(1,2,30)
++    >;
++};
+diff --git a/app/tests/modifiers/rgb-state/events.patterns b/app/tests/modifiers/rgb-state/events.patterns
+new file mode 100644
+index 0000000..ef1a92a
+--- /dev/null
++++ b/app/tests/modifiers/rgb-state/events.patterns
+@@ -0,0 +1,2 @@
++s/.*RGB modifiers: /mods: /p
++s/.*RGB group /group: /p
+diff --git a/app/tests/modifiers/rgb-state/keycode_events.snapshot b/app/tests/modifiers/rgb-state/keycode_events.snapshot
+new file mode 100644
+index 0000000..5019aa4
+--- /dev/null
++++ b/app/tests/modifiers/rgb-state/keycode_events.snapshot
+@@ -0,0 +1,29 @@
++mods: 0x02
++group: 0x22: 0x00ffff
++mods: 0x22
++mods: 0x20
++group: 0x22: 0x00ffff
++mods: 0x24
++mods: 0x64
++group: 0x04: 0xff8000
++group: 0x40: 0xff00ff
++mods: 0x60
++group: 0x04: 0x000000
++group: 0x40: 0xff00ff
++mods: 0x61
++mods: 0x71
++mods: 0x70
++group: 0x11: 0x00ff00
++mods: 0x50
++group: 0x22: 0x000000
++mods: 0x58
++group: 0x88: 0xffff00
++mods: 0x48
++group: 0x11: 0x000000
++mods: 0x08
++group: 0x40: 0x000000
++mods: 0x00
++group: 0x88: 0x000000
++mods: 0x02
++group: 0x22: 0x00ffff
++mods: 0x00
+diff --git a/app/tests/modifiers/rgb-state/native_posix_64.keymap b/app/tests/modifiers/rgb-state/native_posix_64.keymap
+new file mode 100644
+index 0000000..261b0c2
+--- /dev/null
++++ b/app/tests/modifiers/rgb-state/native_posix_64.keymap
+@@ -0,0 +1,85 @@
++#include <dt-bindings/zmk/keys.h>
++#include <dt-bindings/zmk/kscan_mock.h>
++#include <behaviors.dtsi>
++#include <behaviors/ug_modifiers.dtsi>
++
++/ {
++    behaviors {
++        test_shift: test_shift {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <(MOD_LSFT | MOD_RSFT)>;
++        };
++        test_ctrl: test_ctrl {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <(MOD_LCTL | MOD_RCTL)>;
++        };
++        test_alt: test_alt {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <MOD_LALT>;
++        };
++        test_altgr: test_altgr {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <MOD_RALT>;
++        };
++        test_gui: test_gui {
++            compatible = "zmk,behavior-underglow-modifiers";
++            #binding-cells = <2>;
++            mods = <(MOD_LGUI | MOD_RGUI)>;
++        };
++    };
++    keymap {
++        compatible = "zmk,keymap";
++        base {
++            bindings = <
++                &kp LSHFT &kp RSHFT &kp LCTRL &kp RCTRL &kp LALT &kp RALT &kp LGUI
++                &test_shift 0 0x00FFFF &test_ctrl 0 0x00FF00 &test_alt 0 0xFF8000
++                &test_altgr 0 0xFF00FF &test_gui 0 0xFFFF00 &kp A &mt LSHFT F
++                &kp RSHFT &none &none &none &none &none &none
++            >;
++        };
++    };
++};
++
++&kscan {
++    rows = <3>;
++    columns = <7>;
++    events = <
++        ZMK_MOCK_PRESS(1,5,20) ZMK_MOCK_RELEASE(1,5,20)
++        ZMK_MOCK_PRESS(1,6,20) ZMK_MOCK_RELEASE(1,6,20)
++        ZMK_MOCK_PRESS(0,0,20)
++        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
++        ZMK_MOCK_PRESS(0,1,20)
++        ZMK_MOCK_PRESS(2,0,20)
++        ZMK_MOCK_RELEASE(0,0,20)
++        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
++        ZMK_MOCK_RELEASE(2,0,20)
++        ZMK_MOCK_PRESS(0,4,20)
++        ZMK_MOCK_PRESS(0,5,20)
++        ZMK_MOCK_PRESS(1,2,20) ZMK_MOCK_RELEASE(1,2,20)
++        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
++        ZMK_MOCK_RELEASE(0,4,20)
++        ZMK_MOCK_PRESS(1,2,20) ZMK_MOCK_RELEASE(1,2,20)
++        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
++        ZMK_MOCK_PRESS(0,2,20)
++        ZMK_MOCK_PRESS(0,3,20)
++        ZMK_MOCK_RELEASE(0,2,20)
++        ZMK_MOCK_PRESS(1,1,20) ZMK_MOCK_RELEASE(1,1,20)
++        ZMK_MOCK_RELEASE(0,1,20)
++        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
++        ZMK_MOCK_PRESS(0,6,20)
++        ZMK_MOCK_PRESS(1,4,20) ZMK_MOCK_RELEASE(1,4,20)
++        ZMK_MOCK_RELEASE(0,3,20)
++        ZMK_MOCK_PRESS(1,1,20) ZMK_MOCK_RELEASE(1,1,20)
++        ZMK_MOCK_RELEASE(0,5,20)
++        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
++        ZMK_MOCK_RELEASE(0,6,20)
++        ZMK_MOCK_PRESS(1,4,20) ZMK_MOCK_RELEASE(1,4,20)
++        ZMK_MOCK_PRESS(1,6,250)
++        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
++        ZMK_MOCK_RELEASE(1,6,20)
++    >;
++};

@@ -2,8 +2,13 @@
 
 set -euo pipefail
 
-IMAGE=glove80-zmk-config-docker
-BRANCH="${1:-main}"
+image='glove80-modifier-lighting-build'
+revision=$(< config/firmware-revision)
 
-docker build -t "$IMAGE" .
-docker run --rm -v "$PWD:/config" -e UID="$(id -u)" -e GID="$(id -g)" -e BRANCH="$BRANCH" "$IMAGE"
+if (($# > 0)); then
+  printf 'Firmware is pinned in config/firmware-revision; revision overrides are not supported.\n' >&2
+  exit 1
+fi
+
+docker build --build-arg "FIRMWARE_REVISION=$revision" -t "$image" .
+docker run --rm -v "$PWD:/config" -e UID="$(id -u)" -e GID="$(id -g)" "$image"

@@ -13,30 +13,33 @@ RUN <<EOF
     GIT_DIR=/zmk git worktree add --detach /src
 EOF
 
-# Prepopulate the container's nix store with the build dependencies for the main
-# branch and the most recent three tags
+ARG FIRMWARE_REVISION
+ENV FIRMWARE_REVISION=$FIRMWARE_REVISION
+
+# Cache dependencies for the exact community base used by both local and CI builds.
 RUN <<EOF
     cd /src
-    for tag in main $(git tag -l --sort=committerdate | tail -n 3); do
-      git checkout -q --detach $tag
-      nix-shell --run true -A zmk ./default.nix
-    done
+    git fetch origin "$FIRMWARE_REVISION" || exit
+    git checkout -q --detach "$FIRMWARE_REVISION" || exit
+    nix-shell --run true -A zmk ./default.nix
 EOF
 
 COPY --chmod=755 <<EOF /bin/entrypoint.sh
 #!/usr/bin/env bash
     set -euo pipefail
-    : "\${BRANCH:=main}"
+    if [[ \$(< /config/config/firmware-revision) != \$FIRMWARE_REVISION ]]; then
+      echo 'Firmware pin changed; rebuild the image with ./build.sh.' >&2
+      exit 1
+    fi
 
-    echo "Checking out \$BRANCH from moergo-sc/zmk" >&2
     cd /src
-    git fetch origin
-    git checkout -q --detach "\$BRANCH"
+    git apply --check /config/patches/modifier-rgb.patch
+    git apply /config/patches/modifier-rgb.patch
 
     echo 'Building Glove80 firmware' >&2
     cd /config
     nix-build ./config --arg firmware 'import /src/default.nix {}' -j2 -o /tmp/combined --show-trace
-    install -o "\$UID" -g "\$GID" /tmp/combined/glove80.uf2 ./glove80.uf2
+    install -o "\$UID" -g "\$GID" /tmp/combined/glove80.uf2 ./modifier-lighting.uf2
 EOF
 
 ENTRYPOINT ["/bin/entrypoint.sh"]

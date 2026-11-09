@@ -17,7 +17,7 @@
     "glove80"
   ],
   "custom_defined_behaviors": "",
-  "custom_devicetree": "",
+  "custom_devicetree": "#include \"modifier-lighting.dtsi\"",
   "config_parameters": [
     {
       "paramName": "HID_POINTING",

@@ -78,6 +78,7 @@
 
 /* Custom Device-tree */
 
+#include "modifier-lighting.dtsi"
 
 /* Input Listeners */
 

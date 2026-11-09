@@ -10,11 +10,20 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Read pinned community revision
+        id: firmware
+        run: echo "revision=$(< config/firmware-revision)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           repository: moergo-sc/zmk
-          ref: main
+          ref: ${{ steps.firmware.outputs.revision }}
           path: src
+
+      - name: Apply modifier RGB extension
+        run: |
+          git -C src apply --check "$PWD/patches/modifier-rgb.patch"
+          git -C src apply "$PWD/patches/modifier-rgb.patch"
 
       - uses: cachix/install-nix-action@v31
         with:
@@ -28,11 +37,16 @@ jobs:
       - name: Build Glove80 combined firmware
         run: nix-build config -o combined
 
+      - name: Test modifier state and rendering
+        run: |
+          nix-build tests --argstr test modifiers/rgb-state --no-out-link
+          nix-build tests --argstr test modifiers/rgb-renderer --no-out-link
+
       - name: Copy result out of nix store
-        run: cp combined/glove80.uf2 glove80.uf2
+        run: cp combined/glove80.uf2 modifier-lighting.uf2
 
       - name: Upload result
         uses: actions/upload-artifact@v7
         with:
-          name: glove80.uf2
-          path: glove80.uf2
+          name: modifier-lighting.uf2
+          path: modifier-lighting.uf2

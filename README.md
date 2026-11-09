@@ -6,18 +6,22 @@ Personal ZMK keymap for a MoErgo Glove80 used with Swedish (`sv-SE`) input on Ub
 
 - [`config/glove80.keymap`](config/glove80.keymap) is the ZMK keymap exported from the MoErgo Layout Editor and used by this repository's builds.
 - [`config/keymap.json`](config/keymap.json) is the matching editor backup. Its format is experimental; retain the exported file unchanged when possible.
-- [`config/glove80.conf`](config/glove80.conf) enables ZMK pointing-device support required by the Mouse layer.
+- [`config/glove80.conf`](config/glove80.conf) enables pointing and PR36 layer RGB.
+- [`config/modifier-lighting.dtsi`](config/modifier-lighting.dtsi) defines modifier colors and indicator positions, included by both editor backups.
+- [`config/firmware-revision`](config/firmware-revision) pins community PR36; [`patches/modifier-rgb.patch`](patches/modifier-rgb.patch) adds active-modifier RGB predicates.
 - [`docs/layers.md`](docs/layers.md) documents this layout's actual layer maps, thumb access, home-row mods, and text macros.
 - [`docs/recovery.md`](docs/recovery.md) covers editor exports, GitHub builds, firmware downloads, and flashing both halves.
 
 ## Build and install
 
-Pushing a change to GitHub starts the **Build** workflow. Download `glove80.uf2` from the completed workflow run's artifact and follow [`docs/recovery.md`](docs/recovery.md) to install it.
+Pushing a change to GitHub starts the **Build** workflow. Download `modifier-lighting.uf2` from the completed workflow run's artifact and follow [`docs/recovery.md`](docs/recovery.md) to install it. The existing `glove80.uf2` is not overwritten.
 
-For a local Docker build on Linux, run `./build.sh`; optionally pass the MoErgo ZMK branch or tag as its first argument. The build script use the checked-in keymap and configuration.
+For a local Docker build on Linux, run `./build.sh`. Local and CI builds use the same pinned, patched community firmware; revision arguments are intentionally rejected.
+
+Select **layer RGB** with the existing Magic-layer effect control to enable the indicators. Shift is cyan, Ctrl green, Left Alt orange, AltGr magenta, and GUI yellow. Indicators follow active modifiers regardless of which key or macro activated them; normal RGB effects do not show them. See [the indicator map and controls](docs/layers.md#modifier-lighting).
 
 ## Editing and backups
 
-The MoErgo Layout Editor is the source of truth for editing this layout. After changing it, export the keymap DTSI and replace `config/glove80.keymap`; export JSON and replace `config/keymap.json` as a paired backup. Keep the pointing setting enabled in `config/glove80.conf` when rebuilding.
+The MoErgo Layout Editor is the source of truth for editing this layout. After changing it, export the keymap DTSI and replace `config/glove80.keymap`; export JSON and replace `config/keymap.json` as a paired backup. Preserve `#include "modifier-lighting.dtsi"` in Custom Device-tree and both settings in `config/glove80.conf`. Build here: the hosted community firmware does not contain this repository's modifier-state extension or include file.
 
 See [the personal layer map](docs/layers.md) before changing layer access or macros. Build and test a change before relying on it; keep a known-good UF2 as described in [`docs/recovery.md`](docs/recovery.md).

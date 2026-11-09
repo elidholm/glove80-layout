@@ -36,6 +36,24 @@ The home-row modifier keys are `A S D F` on the left and `J K L Ö` on the right
 
 These exported behaviors use `tap-preferred`, `quick-tap-ms = 300`, positional hold-trigger filtering, and `hold-trigger-on-release`. The home-row mod configuration is unchanged from the export; these values are not a uniform 300 ms tapping term. The dedicated thumb Shift keys remain available.
 
+## Modifier lighting
+
+In community PR36 **layer-RGB mode**, active effective HID modifiers select the following colors. Activation may come from a home-row hold, thumb key, another layer, or a macro. Lighting never changes what an indicator key does.
+
+| Active modifier | Color | Home-row indicators | Thumb indicators |
+| --- | --- | --- | --- |
+| Either Shift | Cyan | F and J | LH T1 and RH T1 |
+| Either Ctrl | Green | D and K | LH T2 and RH T2 |
+| Left Alt | Orange | S | LH T6 |
+| Right Alt / AltGr | Magenta | L | RH T6 |
+| Either GUI | Yellow | A and Ö | RH T3 |
+
+Groups combine independently. Releasing one of two active Shifts does not clear the group. Inactive keys are black; all existing functional layers use the same indicator map. Explicit RGB-off suppresses indication, and normal RGB effects do not display modifier colors. Brightness, system status, and battery protection still use the existing renderer.
+
+Hold **Magic** at LH C6R6 to access the existing RGB controls: the Base T position toggles RGB, G advances the effect, R/F increase/decrease brightness. Effects cycle through solid, breathe, spectrum, swirl, and layer RGB; from the default swirl, G once selects layer RGB. Release Magic, then hold Shift to check the colors (repeat the cycle if a different effect was previously saved). The system status display can temporarily cover indications. No key assignments were added for lighting.
+
+This requires the pinned custom build described in [recovery](recovery.md), not just the hosted community selector. See its hardware acceptance checklist before relying on a new UF2.
+
 ## Symbols
 
 Hold LH T2. Bindings below are the actual keycodes in the export; shifted keycodes and Right Alt are interpreted using Swedish input. The arrow and quote entries are text macros.

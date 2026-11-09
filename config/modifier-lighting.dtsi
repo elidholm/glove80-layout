@@ -1,0 +1,75 @@
+#include <behaviors/ug_modifiers.dtsi>
+#include <dt-bindings/zmk/modifiers.h>
+
+/ {
+    behaviors {
+        ug_shift: ug_shift {
+            compatible = "zmk,behavior-underglow-modifiers";
+            #binding-cells = <2>;
+            mods = <(MOD_LSFT | MOD_RSFT)>;
+        };
+        ug_ctrl: ug_ctrl {
+            compatible = "zmk,behavior-underglow-modifiers";
+            #binding-cells = <2>;
+            mods = <(MOD_LCTL | MOD_RCTL)>;
+        };
+        ug_alt: ug_alt {
+            compatible = "zmk,behavior-underglow-modifiers";
+            #binding-cells = <2>;
+            mods = <MOD_LALT>;
+        };
+        ug_altgr: ug_altgr {
+            compatible = "zmk,behavior-underglow-modifiers";
+            #binding-cells = <2>;
+            mods = <MOD_RALT>;
+        };
+        ug_gui: ug_gui {
+            compatible = "zmk,behavior-underglow-modifiers";
+            #binding-cells = <2>;
+            mods = <(MOD_LGUI | MOD_RGUI)>;
+        };
+    };
+};
+
+#define MI_OFF &ug 0x000000
+#define MI_SHIFT &ug_shift 0x000000 0x00FFFF
+#define MI_CTRL &ug_ctrl 0x000000 0x00FF00
+#define MI_ALT &ug_alt 0x000000 0xFF8000
+#define MI_ALTGR &ug_altgr 0x000000 0xFF00FF
+#define MI_GUI &ug_gui 0x000000 0xFFFF00
+
+#define MODIFIER_RGB_MAP \
+    MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                                       MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
+    MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                         MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
+    MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                         MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
+    MI_OFF MI_GUI MI_ALT MI_CTRL MI_SHIFT MI_OFF                      MI_OFF MI_SHIFT MI_CTRL MI_ALTGR MI_GUI MI_OFF \
+    MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_SHIFT MI_CTRL MI_OFF MI_GUI MI_CTRL MI_SHIFT MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
+    MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_ALT    MI_ALTGR MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+
+/* Give every functional layer the same indicators without changing keymap layer state. */
+#define MODIFIER_RGB_LAYER(name, number) \
+    name { layer-id = <number>; bindings = <MODIFIER_RGB_MAP>; fade-delay = <(-1)>; };
+
+/ {
+    underglow-layer {
+        compatible = "zmk,underglow-layer";
+        MODIFIER_RGB_LAYER(mod_base, LAYER_Base)
+        MODIFIER_RGB_LAYER(mod_lower, LAYER_Lower)
+        MODIFIER_RGB_LAYER(mod_symbols, LAYER_Symbols)
+        MODIFIER_RGB_LAYER(mod_navigation, LAYER_Navigation)
+        MODIFIER_RGB_LAYER(mod_numbers, LAYER_Numbers)
+        MODIFIER_RGB_LAYER(mod_workbench, LAYER_Workbench)
+        MODIFIER_RGB_LAYER(mod_mouse, LAYER_Mouse)
+        MODIFIER_RGB_LAYER(mod_magic, LAYER_Magic)
+        MODIFIER_RGB_LAYER(mod_factory, LAYER_Factory)
+    };
+};
+
+#undef MODIFIER_RGB_LAYER
+#undef MODIFIER_RGB_MAP
+#undef MI_OFF
+#undef MI_SHIFT
+#undef MI_CTRL
+#undef MI_ALT
+#undef MI_ALTGR
+#undef MI_GUI
