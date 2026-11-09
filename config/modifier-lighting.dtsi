@@ -7,26 +7,31 @@
             compatible = "zmk,behavior-underglow-modifiers";
             #binding-cells = <2>;
             mods = <(MOD_LSFT | MOD_RSFT)>;
+            key-positions = <38 41 52 57>;
         };
         ug_ctrl: ug_ctrl {
             compatible = "zmk,behavior-underglow-modifiers";
             #binding-cells = <2>;
             mods = <(MOD_LCTL | MOD_RCTL)>;
+            key-positions = <37 42>;
         };
         ug_alt: ug_alt {
             compatible = "zmk,behavior-underglow-modifiers";
             #binding-cells = <2>;
             mods = <MOD_LALT>;
+            key-positions = <36>;
         };
         ug_altgr: ug_altgr {
             compatible = "zmk,behavior-underglow-modifiers";
             #binding-cells = <2>;
             mods = <MOD_RALT>;
+            key-positions = <43>;
         };
         ug_gui: ug_gui {
             compatible = "zmk,behavior-underglow-modifiers";
             #binding-cells = <2>;
             mods = <(MOD_LGUI | MOD_RGUI)>;
+            key-positions = <35 44 55>;
         };
     };
 };
@@ -46,26 +51,17 @@
     MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_SHIFT MI_CTRL MI_OFF MI_GUI MI_CTRL MI_SHIFT MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
     MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_ALT    MI_ALTGR MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
 
-/* Give every functional layer the same indicators without changing keymap layer state. */
-#define MODIFIER_RGB_LAYER(name, number) \
-    name { layer-id = <number>; bindings = <MODIFIER_RGB_MAP>; fade-delay = <(-1)>; };
-
 / {
     underglow-layer {
         compatible = "zmk,underglow-layer";
-        MODIFIER_RGB_LAYER(mod_base, LAYER_Base)
-        MODIFIER_RGB_LAYER(mod_lower, LAYER_Lower)
-        MODIFIER_RGB_LAYER(mod_symbols, LAYER_Symbols)
-        MODIFIER_RGB_LAYER(mod_navigation, LAYER_Navigation)
-        MODIFIER_RGB_LAYER(mod_numbers, LAYER_Numbers)
-        MODIFIER_RGB_LAYER(mod_workbench, LAYER_Workbench)
-        MODIFIER_RGB_LAYER(mod_mouse, LAYER_Mouse)
-        MODIFIER_RGB_LAYER(mod_magic, LAYER_Magic)
-        MODIFIER_RGB_LAYER(mod_factory, LAYER_Factory)
+        mod_base {
+            layer-id = <LAYER_Base>;
+            bindings = <MODIFIER_RGB_MAP>;
+            fade-delay = <(-1)>;
+        };
     };
 };
 
-#undef MODIFIER_RGB_LAYER
 #undef MODIFIER_RGB_MAP
 #undef MI_OFF
 #undef MI_SHIFT

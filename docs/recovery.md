@@ -24,7 +24,7 @@ Preserve `#include "modifier-lighting.dtsi"` in Custom Device-tree. That support
 
 ## GitHub Actions build
 
-The `.github/workflows/build.yml` workflow runs on pushes, pull requests, and manual dispatch. It reads `config/firmware-revision`, checks out that immutable community PR36 revision, applies `patches/modifier-rgb.patch`, runs native modifier/RGB tests, and builds both halves. It uploads their combined `modifier-lighting.uf2`.
+The `.github/workflows/build.yml` workflow runs on pushes, pull requests, and manual dispatch. It reads `config/firmware-revision`, checks out that immutable community PR36 revision, applies `patches/modifier-rgb.patch`, runs native physical-key/RGB tests against both halves' LED lookup tables, and builds both halves. It uploads their combined `modifier-lighting.uf2`.
 
 To download a build:
 
@@ -32,11 +32,19 @@ To download a build:
 2. Download the `modifier-lighting.uf2` artifact.
 3. Retain a known-good copy locally; workflow artifacts may expire.
 
-The community base is `22d6941d055bf05f006c9d4d7088e9564d31ba3a` from [moergo-sc/zmk#36](https://github.com/moergo-sc/zmk/pull/36), which was unmerged when inspected. The [TailorKey RGB guide](https://sites.google.com/view/tailorkey/how-to/rgb) explains why stock firmware is insufficient. Our patch follows PR36's conditional lock-indicator behavior but reads effective HID modifiers, including implicit/masked state, and synchronizes them to the other half. It does not change hold-tap decisions or key output.
+The community base is `22d6941d055bf05f006c9d4d7088e9564d31ba3a` from [moergo-sc/zmk#36](https://github.com/moergo-sc/zmk/pull/36), which was unmerged when inspected. The [TailorKey RGB guide](https://sites.google.com/view/tailorkey/how-to/rgb) explains why stock firmware is insufficient. Our patch follows PR36's conditional lock-indicator behavior but observes original physical position events before hold-taps capture/replay them. It combines configured physical trigger groups on Base and synchronizes a complete snapshot to the other half. It neither observes nor changes HID modifier output.
 
-Primary implementation references at that revision: [conditional RGB indicators](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behaviors/behavior_underglow_indicators.c), [effective HID modifier calculation](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/hid.c), [global split behavior dispatch](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behavior.c), and the [left](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_lh.dts)/[right](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_rh.dts) LED lookup tables.
+Primary implementation references at that revision: [conditional RGB indicators](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behaviors/behavior_underglow_indicators.c), [physical event dispatch](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/event_manager.c), [global split behavior dispatch](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behavior.c), [Bluetooth payload definition](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/include/zmk/split/bluetooth/service.h), and the [left](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_lh.dts)/[right](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_rh.dts) LED lookup tables.
 
-The patch also refreshes layer colors on RGB-on/effect selection so a modifier already held is visible immediately. Explicit off retains PR36's layer-enable guard; existing brightness/status/battery rendering remains in place. Updating the base requires reviewing/reapplying the patch and rerunning tests, not just changing the revision text.
+The patch also refreshes layer colors on RGB-on/effect selection so a trigger already held is visible immediately. Explicit off retains PR36's layer-enable guard; existing brightness/status/battery rendering remains in place. Updating the base requires reviewing/reapplying the patch and rerunning tests, not just changing the revision text.
+
+### Fixes after the first hardware test
+
+The original sync behavior name, `ug_mod_sync`, exceeded the Bluetooth protocol's 9-byte name field (8 characters plus terminator). The central truncated it to `ug_mod_s`, preventing the right half from resolving the behavior. The node is now named `ug_sync`; the protocol is unchanged, and a build assertion enforces the limit. The native regression serializes the name through the real payload structure, resolves it, and applies a complete snapshot.
+
+The expanded renderer test also reproduced a stale-off race: empty layer colors queued an off job on the low-priority queue, but a new snapshot rendered on the system queue before that off job ran and erased the new colors. Snapshot refreshes now use the same low-priority queue, and an obsolete off job does not clear LEDs after RGB has been re-enabled. This proves an additional failure path, not that every non-Shift hardware symptom had that cause.
+
+The former standalone tests did not exercise the Bluetooth name field or the actual 80-key map. The replacement tests include `config/modifier-lighting.dtsi` itself, import each half's pixel lookup from the pinned board source, and assert all 40 LED values at each step. Radio delivery, pairing, and physical LED placement still require hardware acceptance.
 
 ## Local build
 
@@ -51,11 +59,11 @@ The resulting `modifier-lighting.uf2` is written to the repository root, leaving
 For native tests with Nix and a checkout at `src/` prepared exactly as in Actions:
 
 ```bash
-nix-build tests --argstr test modifiers/rgb-state --no-out-link
-nix-build tests --argstr test modifiers/rgb-renderer --no-out-link
+nix-build tests --argstr half lh --no-out-link
+nix-build tests --argstr half rh --no-out-link
 ```
 
-These compile real ZMK HID/behavior code. The renderer test records frames through a test LED device and emulated power GPIO; it is not a physical keyboard test. The tests/fixtures are carried inside the firmware patch.
+These compile real ZMK event/hold-tap/renderer code and check physical taps, every trigger and group, overlapping keys, release order, Base-only gating, macro exclusion, RGB-off/re-enable, and snapshot serialization/lookup. The test LED device and emulated power GPIO are not physical keyboard tests. The tests/fixtures are carried inside the firmware patch.
 
 ## Flash both halves
 
@@ -83,10 +91,10 @@ To roll back, flash the preserved known-good `glove80.uf2` to both halves using 
 
 Select layer RGB using the [existing controls](layers.md#modifier-lighting), then compare LEDs with Linux key events using `sudo evtest` on the Glove80 keyboard device:
 
-1. Tap J normally: it types J without creating Shift indication. Hold J as a resolved Shift: F/J and both T1 thumbs turn cyan. A direct thumb Shift should produce the same lighting.
-2. Hold L as AltGr: L/RH T6 turn magenta, not S/LH T6. Check every group in the indicator map.
-3. Hold both Shifts, then release either one first; the group stays lit until the other releases. Repeat Ctrl and mixed-modifier chords. Check across both halves.
-4. Change functional layers while holding. Toggle RGB off: modifier changes must not wake it. Toggle back on while held: the current indicators should appear. Release: those indicators return to black.
+1. Press J briefly: F/J and both T1 thumbs turn cyan immediately while J is down, even though a quick tap types J without a Shift event. A dedicated thumb Shift produces the same lighting. Holding J still resolves to Shift using the unchanged hold-tap rules.
+2. Press L: L/RH T6 turn magenta, not S/LH T6. Check every physical trigger and group in the indicator map, including Ctrl, Alt, and GUI. Host modifier events are expected only when the corresponding hold resolves.
+3. Hold J+D: Shift and Ctrl groups coexist. Release J: only Ctrl remains. Hold both thumb Shifts and release either first: cyan stays until both release. Repeat with the opposite release order.
+4. Leave Base while holding: all modifier indication disappears. Return to Base: still-held trigger keys light their groups. Release keys while on another layer and return: no stuck lights. Toggle RGB off: physical presses must not wake it. Toggle back on while held: the current groups should appear.
 5. Verify existing system status, brightness, and battery behavior. Disconnect/reconnect the right half while holding a left-side modifier; confirm no stuck or missing indicators after resynchronization.
 6. With the host set to Swedish, verify shifted letters and AltGr+2 producing `@` in a text field. `evtest` reports keycodes, not the host's character translation.
 

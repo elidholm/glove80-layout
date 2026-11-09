@@ -38,17 +38,19 @@ These exported behaviors use `tap-preferred`, `quick-tap-ms = 300`, positional h
 
 ## Modifier lighting
 
-In community PR36 **layer-RGB mode**, active effective HID modifiers select the following colors. Activation may come from a home-row hold, thumb key, another layer, or a macro. Lighting never changes what an indicator key does.
+In community PR36 **layer-RGB mode**, the following physical keys select colors immediately while **Base is the highest active typing layer**. Ordinary letter taps also light their group while down; indication does not wait for hold-tap resolution. Macro-generated modifiers do not trigger indication. Lighting never changes what an indicator key does.
 
-| Active modifier | Color | Home-row indicators | Thumb indicators |
+| Physical trigger keys | Color | Home-row indicators | Thumb indicators |
 | --- | --- | --- | --- |
-| Either Shift | Cyan | F and J | LH T1 and RH T1 |
-| Either Ctrl | Green | D and K | LH T2 and RH T2 |
-| Left Alt | Orange | S | LH T6 |
-| Right Alt / AltGr | Magenta | L | RH T6 |
-| Either GUI | Yellow | A and Ö | RH T3 |
+| F, J, LH T1, RH T1 | Cyan | F and J | LH T1 and RH T1 |
+| D, K | Green | D and K | LH T2 and RH T2 |
+| S | Orange | S | LH T6 |
+| L | Magenta | L | RH T6 |
+| A, Ö, RH T3 | Yellow | A and Ö | RH T3 |
 
-Groups combine independently. Releasing one of two active Shifts does not clear the group. Inactive keys are black; all existing functional layers use the same indicator map. Explicit RGB-off suppresses indication, and normal RGB effects do not display modifier colors. Brightness, system status, and battery protection still use the existing renderer.
+Groups combine independently: J+D lights Shift and Ctrl; releasing J leaves Ctrl. A group stays lit until its last physical trigger releases. Inactive keys are black. Leaving Base suppresses all groups; returning to Base shows whichever trigger keys are still physically held, including keys first pressed on another layer. Explicit RGB-off suppresses indication, and normal RGB effects do not display modifier colors. Brightness, system status, and battery protection still use the existing renderer.
+
+The Ctrl/Alt/AltGr thumb positions are **indicator targets, not trigger keys or new modifier bindings**. They still access their existing layers; pressing them leaves Base and therefore suppresses indication.
 
 Hold **Magic** at LH C6R6 to access the existing RGB controls: the Base T position toggles RGB, G advances the effect, R/F increase/decrease brightness. Effects cycle through solid, breathe, spectrum, swirl, and layer RGB; from the default swirl, G once selects layer RGB. Release Magic, then hold Shift to check the colors (repeat the cycle if a different effect was previously saved). The system status display can temporarily cover indications. No key assignments were added for lighting.
 

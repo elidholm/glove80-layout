@@ -10,11 +10,11 @@ index cabd850..6ddbbe6 100644
 +target_sources(app PRIVATE src/events/underglow_color_changed.c)
 +target_sources(app PRIVATE src/behaviors/behavior_underglow_modifiers.c)
  target_sources_ifdef(CONFIG_ZMK_BACKLIGHT app PRIVATE src/behaviors/behavior_backlight.c)
- 
+
  target_sources_ifdef(CONFIG_ZMK_BATTERY_REPORTING app PRIVATE src/events/battery_state_changed.c)
 diff --git a/app/dts/behaviors/ug_modifiers.dtsi b/app/dts/behaviors/ug_modifiers.dtsi
 new file mode 100644
-index 0000000..18d540c
+index 0000000..fdf3aad
 --- /dev/null
 +++ b/app/dts/behaviors/ug_modifiers.dtsi
 @@ -0,0 +1,12 @@
@@ -24,7 +24,7 @@ index 0000000..18d540c
 +
 +/ {
 +    behaviors {
-+        ug_mod_sync: ug_mod_sync {
++        ug_mod_sync: ug_sync {
 +            compatible = "zmk,behavior-underglow-modifiers-sync";
 +            #binding-cells = <1>;
 +        };
@@ -41,23 +41,26 @@ index 0000000..b1c5bd1
 +include: one_param.yaml
 diff --git a/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml
 new file mode 100644
-index 0000000..8a313de
+index 0000000..340d6f9
 --- /dev/null
 +++ b/app/dts/bindings/behaviors/zmk,behavior-underglow-modifiers.yaml
-@@ -0,0 +1,7 @@
-+description: RGB off/on colors selected by any active effective HID modifier in mods
+@@ -0,0 +1,10 @@
++description: RGB off/on colors selected by physical key groups on Base
 +compatible: "zmk,behavior-underglow-modifiers"
 +include: two_param.yaml
 +properties:
 +  mods:
 +    type: int
 +    required: true
++  key-positions:
++    type: array
++    required: true
 diff --git a/app/include/zmk/rgb_modifiers.h b/app/include/zmk/rgb_modifiers.h
 new file mode 100644
-index 0000000..cc21c12
+index 0000000..4f65096
 --- /dev/null
 +++ b/app/include/zmk/rgb_modifiers.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,17 @@
 +/*
 + * SPDX-License-Identifier: MIT
 + */
@@ -66,20 +69,21 @@ index 0000000..cc21c12
 +
 +#include <zephyr/devicetree.h>
 +#include <stdint.h>
++#include <stdbool.h>
 +
 +#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_underglow_modifiers)
-+void zmk_rgb_modifiers_update(uint8_t modifiers);
++void zmk_rgb_modifiers_position_changed(uint32_t position, bool pressed);
 +void zmk_rgb_modifiers_resync(void);
 +#else
-+static inline void zmk_rgb_modifiers_update(uint8_t modifiers) {}
++static inline void zmk_rgb_modifiers_position_changed(uint32_t position, bool pressed) {}
 +static inline void zmk_rgb_modifiers_resync(void) {}
 +#endif
 diff --git a/app/src/behaviors/behavior_underglow_modifiers.c b/app/src/behaviors/behavior_underglow_modifiers.c
 new file mode 100644
-index 0000000..46e41ee
+index 0000000..9c13733
 --- /dev/null
 +++ b/app/src/behaviors/behavior_underglow_modifiers.c
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,177 @@
 +/*
 + * SPDX-License-Identifier: MIT
 + */
@@ -94,10 +98,23 @@ index 0000000..46e41ee
 +#include <zmk/event_manager.h>
 +#include <zmk/events/underglow_color_changed.h>
 +#include <zmk/rgb_modifiers.h>
++#include <zmk/keymap.h>
++#include <zmk/matrix.h>
++#include <zmk/events/layer_state_changed.h>
++#include <zmk/workqueue.h>
++
++#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE)
++#include <zmk/split/bluetooth/service.h>
++#endif
 +
 +LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 +
 +#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
++
++#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE)
++BUILD_ASSERT(sizeof(DEVICE_DT_NAME(DT_NODELABEL(ug_mod_sync))) <= ZMK_SPLIT_RUN_BEHAVIOR_DEV_LEN,
++             "RGB sync behavior name exceeds the split Bluetooth payload");
++#endif
 +
 +#if IS_ENABLED(CONFIG_ZMK_SPLIT) && !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 +#include <zmk/events/split_peripheral_status_changed.h>
@@ -119,7 +136,7 @@ index 0000000..46e41ee
 +static void apply_snapshot(uint8_t modifiers) {
 +    if (atomic_set(&active_modifiers, modifiers) != modifiers) {
 +        LOG_DBG("RGB modifiers: 0x%02x", modifiers);
-+        k_work_submit(&refresh_work);
++        k_work_submit_to_queue(zmk_workqueue_lowprio_work_q(), &refresh_work);
 +    }
 +}
 +
@@ -140,6 +157,26 @@ index 0000000..46e41ee
 +#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 +
 +static atomic_t pending_modifiers;
++ATOMIC_DEFINE(pressed_positions, ZMK_KEYMAP_LEN);
++
++#define POSITION_MASK(node, prop, idx) \
++    [DT_PROP_BY_IDX(node, prop, idx)] = DT_PROP(node, mods),
++#define GROUP_POSITIONS(n) DT_FOREACH_PROP_ELEM(DT_DRV_INST(n), key_positions, POSITION_MASK)
++static const uint8_t position_masks[ZMK_KEYMAP_LEN] = {
++    DT_INST_FOREACH_STATUS_OKAY(GROUP_POSITIONS)
++};
++
++static uint8_t physical_modifiers(void) {
++    uint8_t modifiers = 0;
++    if (zmk_keymap_highest_layer_active() == 0) {
++        for (int position = 0; position < ZMK_KEYMAP_LEN; position++) {
++            if (atomic_test_bit(pressed_positions, position)) {
++                modifiers |= position_masks[position];
++            }
++        }
++    }
++    return modifiers;
++}
 +
 +static void publish_snapshot(struct k_work *work) {
 +    struct zmk_behavior_binding binding = {
@@ -152,15 +189,36 @@ index 0000000..46e41ee
 +
 +K_WORK_DEFINE(publish_work, publish_snapshot);
 +
-+void zmk_rgb_modifiers_update(uint8_t modifiers) {
++static void update_modifiers(void) {
++    uint8_t modifiers = physical_modifiers();
 +    if (atomic_set(&pending_modifiers, modifiers) != modifiers) {
 +        k_work_submit(&publish_work);
 +    }
 +}
 +
-+void zmk_rgb_modifiers_resync(void) { k_work_submit(&publish_work); }
++void zmk_rgb_modifiers_position_changed(uint32_t position, bool pressed) {
++    if (position < ZMK_KEYMAP_LEN && position_masks[position]) {
++        atomic_set_bit_to(pressed_positions, position, pressed);
++        update_modifiers();
++    }
++}
++
++void zmk_rgb_modifiers_resync(void) {
++    atomic_set(&pending_modifiers, physical_modifiers());
++    k_work_submit(&publish_work);
++}
++
++static int layer_changed(const zmk_event_t *eh) {
++    update_modifiers();
++    return ZMK_EV_EVENT_BUBBLE;
++}
++
++ZMK_LISTENER(rgb_modifiers, layer_changed);
++ZMK_SUBSCRIPTION(rgb_modifiers, zmk_layer_state_changed);
 +
 +#else
++
++void zmk_rgb_modifiers_position_changed(uint32_t position, bool pressed) {}
 +
 +static int peripheral_status_changed(const zmk_event_t *eh) {
 +    const struct zmk_split_peripheral_status_changed *ev =
@@ -203,36 +261,37 @@ index 0000000..46e41ee
 +DT_INST_FOREACH_STATUS_OKAY(MOD_INST)
 +
 +#endif
-diff --git a/app/src/hid.c b/app/src/hid.c
-index cf5a557..19f15e8 100644
---- a/app/src/hid.c
-+++ b/app/src/hid.c
-@@ -9,6 +9,7 @@
+diff --git a/app/src/event_manager.c b/app/src/event_manager.c
+index c28da97..97cc292 100644
+--- a/app/src/event_manager.c
++++ b/app/src/event_manager.c
+@@ -10,6 +10,8 @@
  LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
- 
- #include <zmk/hid.h>
+
+ #include <zmk/event_manager.h>
++#include <zmk/events/position_state_changed.h>
 +#include <zmk/rgb_modifiers.h>
- #include <dt-bindings/zmk/modifiers.h>
- 
- static struct zmk_hid_keyboard_report keyboard_report = {
-@@ -43,6 +44,7 @@ static zmk_mod_flags_t masked_modifiers = 0;
- #define SET_MODIFIERS(mods)                                                                        \
-     {                                                                                              \
-         keyboard_report.body.modifiers = (mods & ~masked_modifiers) | implicit_modifiers;          \
-+        zmk_rgb_modifiers_update(keyboard_report.body.modifiers);                                  \
-         LOG_DBG("Modifiers set to 0x%02X", keyboard_report.body.modifiers);                        \
-     }
- 
-@@ -316,6 +318,7 @@ bool zmk_hid_keyboard_is_pressed(zmk_key_t code) {
- 
- void zmk_hid_keyboard_clear(void) {
-     memset(&keyboard_report.body, 0, sizeof(keyboard_report.body));
-+    zmk_rgb_modifiers_update(0);
+
+ extern struct zmk_event_type *__event_type_start[];
+ extern struct zmk_event_type *__event_type_end[];
+@@ -45,7 +47,14 @@ int zmk_event_manager_handle_from(zmk_event_t *event, uint8_t start_index) {
+     return 0;
  }
- 
- int zmk_hid_consumer_press(zmk_key_t code) {
+
+-int zmk_event_manager_raise(zmk_event_t *event) { return zmk_event_manager_handle_from(event, 0); }
++int zmk_event_manager_raise(zmk_event_t *event) {
++    const struct zmk_position_state_changed *position = as_zmk_position_state_changed(event);
++    if (position) {
++        /* Observe the original event before hold-taps capture/replay it. */
++        zmk_rgb_modifiers_position_changed(position->position, position->state);
++    }
++    return zmk_event_manager_handle_from(event, 0);
++}
+
+ int zmk_event_manager_raise_after(zmk_event_t *event, const struct zmk_listener *listener) {
+     uint8_t len = __event_subscriptions_end - __event_subscriptions_start;
 diff --git a/app/src/rgb_underglow.c b/app/src/rgb_underglow.c
-index 3e7492c..42d95bd 100644
+index 3e7492c..8337325 100644
 --- a/app/src/rgb_underglow.c
 +++ b/app/src/rgb_underglow.c
 @@ -643,6 +643,11 @@ int zmk_rgb_underglow_on(void) {
@@ -246,8 +305,19 @@ index 3e7492c..42d95bd 100644
 +#endif
      return zmk_rgb_underglow_save_state();
  }
- 
-@@ -705,6 +710,9 @@ int zmk_rgb_underglow_select_effect(int effect) {
+
+@@ -661,6 +666,10 @@ int zmk_rgb_underglow_transient_on(void) {
+ }
+
+ static void zmk_rgb_underglow_off_handler(struct k_work *work) {
++    /* A newer layer update may have re-enabled RGB since this work was queued. */
++    if (state.on) {
++        return;
++    }
+     for (int i = 0; i < STRIP_NUM_PIXELS; i++) {
+         pixels[i] = (struct led_rgb){r : 0, g : 0, b : 0};
+     }
+@@ -705,6 +714,9 @@ int zmk_rgb_underglow_select_effect(int effect) {
      state.animation_step = 0;
  #if IS_ENABLED(UNDERGLOW_LAYER_ENABLED)
      state.layer_enabled = (effect == UNDERGLOW_EFFECT_LAYER_INDICATORS);
@@ -257,7 +327,7 @@ index 3e7492c..42d95bd 100644
  #endif
      return zmk_rgb_underglow_save_state();
  }
-@@ -1041,7 +1049,7 @@ static int rgb_underglow_event_listener(const zmk_event_t *eh) {
+@@ -1041,7 +1053,7 @@ static int rgb_underglow_event_listener(const zmk_event_t *eh) {
          const struct zmk_split_peripheral_layer_changed *ev =
              as_zmk_split_peripheral_layer_changed(eh);
          LOG_DBG("zmk_split_peripheral_layer_changed: %08x", ev->layers);
@@ -272,7 +342,7 @@ index 6751b8c..ace1074 100644
 +++ b/app/src/rgb_underglow_layer.c
 @@ -79,7 +79,7 @@ uint8_t rgb_underglow_top_layer_with_state(uint32_t state_to_test) {
  }
- 
+
  uint32_t rgb_underglow_layers_state(void) {
 -#if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 +#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
@@ -281,7 +351,7 @@ index 6751b8c..ace1074 100644
      return peripheral_layers_state();
 @@ -87,7 +87,7 @@ uint32_t rgb_underglow_layers_state(void) {
  }
- 
+
  uint8_t rgb_underglow_top_layer(void) {
 -#if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 +#if !IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
@@ -301,40 +371,80 @@ index ede95d3..34010b4 100644
  #include <zmk/split/transport/central.h>
  #include <zmk/split/bluetooth/uuid.h>
 @@ -717,6 +718,9 @@ static uint8_t split_central_chrc_discovery_func(struct bt_conn *conn,
- 
+
      subscribed = subscribed && slot->update_layers_handle;
- 
+
 +    if (subscribed) {
 +        zmk_rgb_modifiers_resync();
 +    }
      return subscribed ? BT_GATT_ITER_STOP : BT_GATT_ITER_CONTINUE;
  }
- 
+
 diff --git a/app/tests/modifiers/rgb-renderer/events.patterns b/app/tests/modifiers/rgb-renderer/events.patterns
 new file mode 100644
-index 0000000..a7bff86
+index 0000000..220d488
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/events.patterns
 @@ -0,0 +1 @@
-+s/.*LED frame: /frame: /p
++s/.*RGB check: /check: /p
 diff --git a/app/tests/modifiers/rgb-renderer/keycode_events.snapshot b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
 new file mode 100644
-index 0000000..07ddc83
+index 0000000..73f6b57
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
-@@ -0,0 +1,12 @@
-+frame: 006464 000000
-+frame: 000000 000000
-+frame: 000000 640064
-+frame: 000000 000000
-+frame: 006464 000000
-+frame: 000000 000000
-+frame: 006464 000000
-+frame: 000000 000000
-+frame: 006464 000000
-+frame: 000000 000000
-+frame: 000000 640064
-+frame: 000000 000000
+@@ -0,0 +1,52 @@
++check: split snapshot all groups
++check: split snapshot cleared
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: individual physical key pressed
++check: individual physical key released
++check: J lights before hold resolution
++check: J and D combine before hold resolution
++check: release J leaves Ctrl
++check: release D clears remaining group
++check: all five physical groups combine
++check: release Ctrl preserves four groups
++check: all five groups released
++check: both thumb Shifts
++check: right Shift survives left release
++check: both Shifts released
++check: left Shift survives right release
++check: reverse release clears Shift
++check: implicit Shift from unlisted key ignored
++check: Shift before layer change
++check: higher layer suppresses indication
++check: AltGr pressed outside Base stays dark
++check: return to Base shows still-held AltGr only
++check: release after layer change
++check: Shift before RGB off
++check: queued off cannot erase re-enabled Shift
++check: physical changes respect RGB off
++check: RGB on restores held groups
++check: release after RGB on
++check: resync preserves current state
++check: held Shift before receiver reset
++check: receiver snapshot cleared
++check: resync restores unchanged held snapshot
++check: release after resync
 diff --git a/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt b/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt
 new file mode 100644
 index 0000000..5192fbe
@@ -358,24 +468,32 @@ index 0000000..0fc457f
 +    required: true
 diff --git a/app/tests/modifiers/rgb-renderer/mock/led_strip.c b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
 new file mode 100644
-index 0000000..ee6fdcf
+index 0000000..488b039
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,182 @@
++#include <stdlib.h>
 +#include <zephyr/device.h>
 +#include <zephyr/drivers/led_strip.h>
++#include <zephyr/kernel.h>
 +#include <zephyr/logging/log.h>
++#include <drivers/behavior.h>
++#include <zmk/behavior.h>
++#include <zmk/events/position_state_changed.h>
++#include <zmk/hid.h>
++#include <zmk/keymap.h>
++#include <zmk/rgb_modifiers.h>
++#include <zmk/rgb_underglow.h>
++#include <zmk/rgb_underglow_layer.h>
++#include <zmk/split/bluetooth/service.h>
 +
 +LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 +
++static struct led_rgb frame[40];
++
 +static int update_rgb(const struct device *dev, struct led_rgb *pixels, size_t count) {
-+    static struct led_rgb previous[2];
-+    if (memcmp(previous, pixels, sizeof(previous)) != 0) {
-+        memcpy(previous, pixels, sizeof(previous));
-+        LOG_DBG("LED frame: %02x%02x%02x %02x%02x%02x",
-+                pixels[0].r, pixels[0].g, pixels[0].b,
-+                pixels[1].r, pixels[1].g, pixels[1].b);
-+    }
++    __ASSERT(count == ARRAY_SIZE(frame), "Unexpected strip size");
++    memcpy(frame, pixels, sizeof(frame));
 +    return 0;
 +}
 +
@@ -383,6 +501,159 @@ index 0000000..ee6fdcf
 +
 +DEVICE_DT_DEFINE(DT_NODELABEL(test_led), NULL, NULL, NULL, NULL, POST_KERNEL,
 +                 CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &api);
++
++enum { SHIFT = BIT(0), CTRL = BIT(1), ALT = BIT(2), ALTGR = BIT(3), GROUP_GUI = BIT(4) };
++
++static void check_frame(const char *name, uint8_t groups) {
++    k_sleep(K_MSEC(30));
++    for (int pixel = 0; pixel < ARRAY_SIZE(frame); pixel++) {
++        int position = rgb_pixel_lookup(pixel);
++        uint32_t color = 0;
++        if ((groups & SHIFT) && (position == 38 || position == 41 || position == 52 || position == 57)) {
++            color = 0x00FFFF;
++        } else if ((groups & CTRL) && (position == 37 || position == 42 || position == 53 || position == 56)) {
++            color = 0x00FF00;
++        } else if ((groups & ALT) && (position == 36 || position == 71)) {
++            color = 0xFF8000;
++        } else if ((groups & ALTGR) && (position == 43 || position == 72)) {
++            color = 0xFF00FF;
++        } else if ((groups & GROUP_GUI) && (position == 35 || position == 44 || position == 55)) {
++            color = 0xFFFF00;
++        }
++        struct led_rgb expected = {
++            .r = ((color >> 16) & 0xFF) * 100 / 255,
++            .g = ((color >> 8) & 0xFF) * 100 / 255,
++            .b = (color & 0xFF) * 100 / 255,
++        };
++        if (memcmp(&frame[pixel], &expected, sizeof(expected))) {
++            LOG_ERR("%s: position %d: got %02x%02x%02x expected %02x%02x%02x", name, position,
++                    frame[pixel].r, frame[pixel].g, frame[pixel].b,
++                    expected.r, expected.g, expected.b);
++            exit(1);
++        }
++    }
++    LOG_INF("RGB check: %s", name);
++}
++
++static void position(uint32_t key, bool pressed) {
++    raise_zmk_position_state_changed((struct zmk_position_state_changed){
++        .position = key, .state = pressed,
++        .source = ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL, .timestamp = k_uptime_get(),
++    });
++}
++
++static void run_tests(void *a, void *b, void *c) {
++    k_sleep(K_MSEC(50));
++    zmk_rgb_underglow_select_effect(4);
++    zmk_rgb_underglow_on();
++
++    /* Exercise the actual Bluetooth payload limit and receiving behavior lookup. */
++    struct zmk_split_run_behavior_payload payload = {0};
++    const char *name = DEVICE_DT_NAME(DT_NODELABEL(ug_mod_sync));
++    __ASSERT(strlcpy(payload.behavior_dev, name, sizeof(payload.behavior_dev)) < sizeof(payload.behavior_dev),
++             "Split behavior name truncated");
++    const struct device *receiver = zmk_behavior_get_binding(payload.behavior_dev);
++    __ASSERT(receiver != NULL, "Peripheral cannot resolve sync behavior");
++    payload.data.param1 = 0xFF;
++    struct zmk_behavior_binding binding = {
++        .behavior_dev = payload.behavior_dev, .param1 = payload.data.param1,
++    };
++    behavior_keymap_binding_pressed(&binding, (struct zmk_behavior_binding_event){0});
++    check_frame("split snapshot all groups", SHIFT | CTRL | ALT | ALTGR | GROUP_GUI);
++    binding.param1 = 0;
++    behavior_keymap_binding_pressed(&binding, (struct zmk_behavior_binding_event){0});
++    check_frame("split snapshot cleared", 0);
++
++    const uint8_t keys[] = {38, 41, 52, 57, 37, 42, 36, 43, 35, 44, 55};
++    const uint8_t groups[] = {SHIFT, SHIFT, SHIFT, SHIFT, CTRL, CTRL, ALT, ALTGR, GROUP_GUI, GROUP_GUI, GROUP_GUI};
++    for (int i = 0; i < ARRAY_SIZE(keys); i++) {
++        position(keys[i], true);
++        check_frame("individual physical key pressed", groups[i]);
++        position(keys[i], false);
++        check_frame("individual physical key released", 0);
++    }
++
++    position(41, true);
++    check_frame("J lights before hold resolution", SHIFT);
++    __ASSERT(zmk_hid_get_explicit_mods() == 0, "Home-row hold resolved too soon");
++    position(37, true);
++    check_frame("J and D combine before hold resolution", SHIFT | CTRL);
++    position(41, false);
++    check_frame("release J leaves Ctrl", CTRL);
++    position(37, false);
++    check_frame("release D clears remaining group", 0);
++
++    position(41, true);
++    position(37, true);
++    position(36, true);
++    position(43, true);
++    position(35, true);
++    check_frame("all five physical groups combine", SHIFT | CTRL | ALT | ALTGR | GROUP_GUI);
++    position(37, false);
++    check_frame("release Ctrl preserves four groups", SHIFT | ALT | ALTGR | GROUP_GUI);
++    position(35, false);
++    position(43, false);
++    position(36, false);
++    position(41, false);
++    check_frame("all five groups released", 0);
++
++    position(52, true);
++    position(57, true);
++    check_frame("both thumb Shifts", SHIFT);
++    position(52, false);
++    check_frame("right Shift survives left release", SHIFT);
++    position(57, false);
++    check_frame("both Shifts released", 0);
++    position(52, true);
++    position(57, true);
++    position(57, false);
++    check_frame("left Shift survives right release", SHIFT);
++    position(52, false);
++    check_frame("reverse release clears Shift", 0);
++
++    position(0, true);
++    check_frame("implicit Shift from unlisted key ignored", 0);
++    position(0, false);
++    position(52, true);
++    check_frame("Shift before layer change", SHIFT);
++    zmk_keymap_layer_activate(1);
++    check_frame("higher layer suppresses indication", 0);
++    position(43, true);
++    check_frame("AltGr pressed outside Base stays dark", 0);
++    position(52, false);
++    zmk_keymap_layer_deactivate(1);
++    check_frame("return to Base shows still-held AltGr only", ALTGR);
++    position(43, false);
++    check_frame("release after layer change", 0);
++
++    position(52, true);
++    check_frame("Shift before RGB off", SHIFT);
++    zmk_rgb_underglow_off();
++    zmk_rgb_underglow_on();
++    check_frame("queued off cannot erase re-enabled Shift", SHIFT);
++    zmk_rgb_underglow_off();
++    position(37, true);
++    check_frame("physical changes respect RGB off", 0);
++    zmk_rgb_underglow_on();
++    check_frame("RGB on restores held groups", SHIFT | CTRL);
++    position(52, false);
++    position(37, false);
++    check_frame("release after RGB on", 0);
++    zmk_rgb_modifiers_resync();
++    check_frame("resync preserves current state", 0);
++    position(52, true);
++    check_frame("held Shift before receiver reset", SHIFT);
++    binding.param1 = 0;
++    behavior_keymap_binding_pressed(&binding, (struct zmk_behavior_binding_event){0});
++    check_frame("receiver snapshot cleared", 0);
++    zmk_rgb_modifiers_resync();
++    check_frame("resync restores unchanged held snapshot", SHIFT);
++    position(52, false);
++    check_frame("release after resync", 0);
++    exit(0);
++}
++
++K_THREAD_DEFINE(rgb_test_thread, 4096, run_tests, NULL, NULL, NULL, 5, 0, 0);
 diff --git a/app/tests/modifiers/rgb-renderer/mock/zephyr/module.yml b/app/tests/modifiers/rgb-renderer/mock/zephyr/module.yml
 new file mode 100644
 index 0000000..a1161c7
@@ -408,16 +679,16 @@ index 0000000..cef6422
 +CONFIG_ZMK_RGB_UNDERGLOW_BRT_MAX=100
 diff --git a/app/tests/modifiers/rgb-renderer/native_posix_64.keymap b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
 new file mode 100644
-index 0000000..e631782
+index 0000000..d1a6a6c
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,67 @@
 +#include <dt-bindings/zmk/keys.h>
-+#include <dt-bindings/zmk/kscan_mock.h>
-+#include <dt-bindings/zmk/rgb.h>
 +#include <dt-bindings/gpio/gpio.h>
 +#include <behaviors.dtsi>
-+#include <behaviors/ug_modifiers.dtsi>
++
++#define LAYER_Base 0
++#include "modifier-lighting.dtsi"
 +
 +/delete-node/ &ug_b2;
 +/delete-node/ &ug_b4;
@@ -442,214 +713,40 @@ index 0000000..e631782
 +    };
 +    test_led: test_led {
 +        compatible = "test,rgb-strip";
-+        chain-length = <2>;
-+    };
-+    behaviors {
-+        test_shift: test_shift {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <(MOD_LSFT | MOD_RSFT)>;
-+        };
-+        test_altgr: test_altgr {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <MOD_RALT>;
-+        };
-+        test_morph: test_morph {
-+            compatible = "zmk,behavior-mod-morph";
-+            #binding-cells = <0>;
-+            bindings = <&kp A>, <&kp B>;
-+            mods = <MOD_LSFT>;
-+        };
++        chain-length = <40>;
 +    };
 +    keymap {
 +        compatible = "zmk,keymap";
 +        base {
 +            bindings = <
-+                &kp LSHFT &kp RALT &rgb_ug RGB_EFS_CMD 4 &rgb_ug RGB_TOG
-+                &kp LS(A) &test_morph &mo 1 &none
++                &kp LS(A) &none &none &none &none &none &none &none &none &none
++                &none &none &none &none &none &none &none &none &none &none
++                &none &none &none &none &none &none &none &none &none &none
++                &none &none &none &none &none &mt LGUI A &mt LALT S &mt LCTRL D &mt LSHFT F &none
++                &none &mt RSHFT J &mt RCTRL K &mt RALT L &mt LGUI SEMI &none &none &none &none &none
++                &none &none &kp LSHFT &mo 1 &none &kp LGUI &mo 1 &kp RSHFT &none &none
++                &none &none &none &none &none &none &none &none &none &none
++                &none &mo 1 &mo 1 &none &none &none &none &none &none &none
 +            >;
 +        };
 +        higher {
 +            bindings = <
-+                &trans &trans &trans &trans
-+                &trans &trans &trans &trans
-+            >;
-+        };
-+    };
-+    underglow-layer {
-+        compatible = "zmk,underglow-layer";
-+        pixel-lookup = <0 1>;
-+        base {
-+            layer-id = <0>;
-+            fade-delay = <(-1)>;
-+            bindings = <
-+                &test_shift 0 0x00FFFF &test_altgr 0 0xFF00FF &ug 0 &ug 0
-+                &ug 0 &ug 0 &ug 0 &ug 0
-+            >;
-+        };
-+        higher {
-+            layer-id = <1>;
-+            fade-delay = <(-1)>;
-+            bindings = <
-+                &test_shift 0 0x00FFFF &test_altgr 0 0xFF00FF &ug 0 &ug 0
-+                &ug 0 &ug 0 &ug 0 &ug 0
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
 +            >;
 +        };
 +    };
 +};
 +
 +&kscan {
-+    rows = <2>;
-+    columns = <4>;
-+    events = <
-+        ZMK_MOCK_PRESS(0,2,30) ZMK_MOCK_RELEASE(0,2,30)
-+        ZMK_MOCK_PRESS(0,0,30)
-+        ZMK_MOCK_PRESS(0,3,30) ZMK_MOCK_RELEASE(0,3,30)
-+        ZMK_MOCK_PRESS(0,1,30)
-+        ZMK_MOCK_RELEASE(0,0,30)
-+        ZMK_MOCK_PRESS(0,3,30) ZMK_MOCK_RELEASE(0,3,30)
-+        ZMK_MOCK_RELEASE(0,1,30)
-+        ZMK_MOCK_PRESS(1,0,30) ZMK_MOCK_RELEASE(1,0,30)
-+        ZMK_MOCK_PRESS(0,0,30)
-+        ZMK_MOCK_PRESS(1,1,30) ZMK_MOCK_RELEASE(1,1,30)
-+        ZMK_MOCK_RELEASE(0,0,30)
-+        ZMK_MOCK_PRESS(1,2,30)
-+        ZMK_MOCK_PRESS(0,1,30) ZMK_MOCK_RELEASE(0,1,30)
-+        ZMK_MOCK_RELEASE(1,2,30)
-+    >;
-+};
-diff --git a/app/tests/modifiers/rgb-state/events.patterns b/app/tests/modifiers/rgb-state/events.patterns
-new file mode 100644
-index 0000000..ef1a92a
---- /dev/null
-+++ b/app/tests/modifiers/rgb-state/events.patterns
-@@ -0,0 +1,2 @@
-+s/.*RGB modifiers: /mods: /p
-+s/.*RGB group /group: /p
-diff --git a/app/tests/modifiers/rgb-state/keycode_events.snapshot b/app/tests/modifiers/rgb-state/keycode_events.snapshot
-new file mode 100644
-index 0000000..5019aa4
---- /dev/null
-+++ b/app/tests/modifiers/rgb-state/keycode_events.snapshot
-@@ -0,0 +1,29 @@
-+mods: 0x02
-+group: 0x22: 0x00ffff
-+mods: 0x22
-+mods: 0x20
-+group: 0x22: 0x00ffff
-+mods: 0x24
-+mods: 0x64
-+group: 0x04: 0xff8000
-+group: 0x40: 0xff00ff
-+mods: 0x60
-+group: 0x04: 0x000000
-+group: 0x40: 0xff00ff
-+mods: 0x61
-+mods: 0x71
-+mods: 0x70
-+group: 0x11: 0x00ff00
-+mods: 0x50
-+group: 0x22: 0x000000
-+mods: 0x58
-+group: 0x88: 0xffff00
-+mods: 0x48
-+group: 0x11: 0x000000
-+mods: 0x08
-+group: 0x40: 0x000000
-+mods: 0x00
-+group: 0x88: 0x000000
-+mods: 0x02
-+group: 0x22: 0x00ffff
-+mods: 0x00
-diff --git a/app/tests/modifiers/rgb-state/native_posix_64.keymap b/app/tests/modifiers/rgb-state/native_posix_64.keymap
-new file mode 100644
-index 0000000..261b0c2
---- /dev/null
-+++ b/app/tests/modifiers/rgb-state/native_posix_64.keymap
-@@ -0,0 +1,85 @@
-+#include <dt-bindings/zmk/keys.h>
-+#include <dt-bindings/zmk/kscan_mock.h>
-+#include <behaviors.dtsi>
-+#include <behaviors/ug_modifiers.dtsi>
-+
-+/ {
-+    behaviors {
-+        test_shift: test_shift {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <(MOD_LSFT | MOD_RSFT)>;
-+        };
-+        test_ctrl: test_ctrl {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <(MOD_LCTL | MOD_RCTL)>;
-+        };
-+        test_alt: test_alt {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <MOD_LALT>;
-+        };
-+        test_altgr: test_altgr {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <MOD_RALT>;
-+        };
-+        test_gui: test_gui {
-+            compatible = "zmk,behavior-underglow-modifiers";
-+            #binding-cells = <2>;
-+            mods = <(MOD_LGUI | MOD_RGUI)>;
-+        };
-+    };
-+    keymap {
-+        compatible = "zmk,keymap";
-+        base {
-+            bindings = <
-+                &kp LSHFT &kp RSHFT &kp LCTRL &kp RCTRL &kp LALT &kp RALT &kp LGUI
-+                &test_shift 0 0x00FFFF &test_ctrl 0 0x00FF00 &test_alt 0 0xFF8000
-+                &test_altgr 0 0xFF00FF &test_gui 0 0xFFFF00 &kp A &mt LSHFT F
-+                &kp RSHFT &none &none &none &none &none &none
-+            >;
-+        };
-+    };
-+};
-+
-+&kscan {
-+    rows = <3>;
-+    columns = <7>;
-+    events = <
-+        ZMK_MOCK_PRESS(1,5,20) ZMK_MOCK_RELEASE(1,5,20)
-+        ZMK_MOCK_PRESS(1,6,20) ZMK_MOCK_RELEASE(1,6,20)
-+        ZMK_MOCK_PRESS(0,0,20)
-+        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
-+        ZMK_MOCK_PRESS(0,1,20)
-+        ZMK_MOCK_PRESS(2,0,20)
-+        ZMK_MOCK_RELEASE(0,0,20)
-+        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
-+        ZMK_MOCK_RELEASE(2,0,20)
-+        ZMK_MOCK_PRESS(0,4,20)
-+        ZMK_MOCK_PRESS(0,5,20)
-+        ZMK_MOCK_PRESS(1,2,20) ZMK_MOCK_RELEASE(1,2,20)
-+        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
-+        ZMK_MOCK_RELEASE(0,4,20)
-+        ZMK_MOCK_PRESS(1,2,20) ZMK_MOCK_RELEASE(1,2,20)
-+        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
-+        ZMK_MOCK_PRESS(0,2,20)
-+        ZMK_MOCK_PRESS(0,3,20)
-+        ZMK_MOCK_RELEASE(0,2,20)
-+        ZMK_MOCK_PRESS(1,1,20) ZMK_MOCK_RELEASE(1,1,20)
-+        ZMK_MOCK_RELEASE(0,1,20)
-+        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
-+        ZMK_MOCK_PRESS(0,6,20)
-+        ZMK_MOCK_PRESS(1,4,20) ZMK_MOCK_RELEASE(1,4,20)
-+        ZMK_MOCK_RELEASE(0,3,20)
-+        ZMK_MOCK_PRESS(1,1,20) ZMK_MOCK_RELEASE(1,1,20)
-+        ZMK_MOCK_RELEASE(0,5,20)
-+        ZMK_MOCK_PRESS(1,3,20) ZMK_MOCK_RELEASE(1,3,20)
-+        ZMK_MOCK_RELEASE(0,6,20)
-+        ZMK_MOCK_PRESS(1,4,20) ZMK_MOCK_RELEASE(1,4,20)
-+        ZMK_MOCK_PRESS(1,6,250)
-+        ZMK_MOCK_PRESS(1,0,20) ZMK_MOCK_RELEASE(1,0,20)
-+        ZMK_MOCK_RELEASE(1,6,20)
-+    >;
++    rows = <1>;
++    columns = <80>;
++    events = <>;
++    /delete-property/ exit-after;
 +};

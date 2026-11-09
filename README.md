@@ -8,7 +8,7 @@ Personal ZMK keymap for a MoErgo Glove80 used with Swedish (`sv-SE`) input on Ub
 - [`config/keymap.json`](config/keymap.json) is the matching editor backup. Its format is experimental; retain the exported file unchanged when possible.
 - [`config/glove80.conf`](config/glove80.conf) enables pointing and PR36 layer RGB.
 - [`config/modifier-lighting.dtsi`](config/modifier-lighting.dtsi) defines modifier colors and indicator positions, included by both editor backups.
-- [`config/firmware-revision`](config/firmware-revision) pins community PR36; [`patches/modifier-rgb.patch`](patches/modifier-rgb.patch) adds active-modifier RGB predicates.
+- [`config/firmware-revision`](config/firmware-revision) pins community PR36; [`patches/modifier-rgb.patch`](patches/modifier-rgb.patch) adds physical-key RGB predicates and split synchronization.
 - [`docs/layers.md`](docs/layers.md) documents this layout's actual layer maps, thumb access, home-row mods, and text macros.
 - [`docs/recovery.md`](docs/recovery.md) covers editor exports, GitHub builds, firmware downloads, and flashing both halves.
 
@@ -18,7 +18,7 @@ Pushing a change to GitHub starts the **Build** workflow. Download `modifier-lig
 
 For a local Docker build on Linux, run `./build.sh`. Local and CI builds use the same pinned, patched community firmware; revision arguments are intentionally rejected.
 
-Select **layer RGB** with the existing Magic-layer effect control to enable the indicators. Shift is cyan, Ctrl green, Left Alt orange, AltGr magenta, and GUI yellow. Indicators follow active modifiers regardless of which key or macro activated them; normal RGB effects do not show them. See [the indicator map and controls](docs/layers.md#modifier-lighting).
+Select **layer RGB** with the existing Magic-layer effect control to enable the indicators on **Base only**. Shift is cyan, Ctrl green, Left Alt orange, AltGr magenta, and GUI yellow. Listed physical keys light their groups immediately, including ordinary letter taps; macro-generated modifiers do not. Normal RGB effects do not show these indicators. See [the indicator map and controls](docs/layers.md#modifier-lighting).
 
 ## Editing and backups
 

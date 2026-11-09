@@ -37,10 +37,10 @@ jobs:
       - name: Build Glove80 combined firmware
         run: nix-build config -o combined
 
-      - name: Test modifier state and rendering
+      - name: Test physical-key indication on both LED maps
         run: |
-          nix-build tests --argstr test modifiers/rgb-state --no-out-link
-          nix-build tests --argstr test modifiers/rgb-renderer --no-out-link
+          nix-build tests --argstr half lh --no-out-link
+          nix-build tests --argstr half rh --no-out-link
 
       - name: Copy result out of nix store
         run: cp combined/glove80.uf2 modifier-lighting.uf2
