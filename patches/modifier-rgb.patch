@@ -389,10 +389,10 @@ index 0000000..220d488
 +s/.*RGB check: /check: /p
 diff --git a/app/tests/modifiers/rgb-renderer/keycode_events.snapshot b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
 new file mode 100644
-index 0000000..73f6b57
+index 0000000..eab9c24
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/keycode_events.snapshot
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,77 @@
 +check: split snapshot all groups
 +check: split snapshot cleared
 +check: individual physical key pressed
@@ -445,6 +445,31 @@ index 0000000..73f6b57
 +check: receiver snapshot cleared
 +check: resync restores unchanged held snapshot
 +check: release after resync
++check: Symbols exact map including transparent keys dark
++check: symbol key does not introduce Base modifier indication
++check: Numbers overrides Symbols without lower color bleed
++check: disabled Number key stays dark
++check: Workbench overrides Numbers and Symbols
++check: Git macro leaves Workbench lighting unchanged
++check: release Workbench restores Numbers
++check: release Numbers restores Symbols
++check: Navigation overrides Symbols and remains unlit
++check: release Navigation restores Symbols
++check: unrelated higher layer remains unlit
++check: release unrelated layer restores Symbols
++check: unrelated higher layer remains unlit
++check: release unrelated layer restores Symbols
++check: unrelated higher layer remains unlit
++check: release unrelated layer restores Symbols
++check: release Symbols restores idle Base
++check: Base Shift before semantic layer
++check: Numbers replaces held Base Shift indication
++check: return to Base restores held Shift
++check: Base release after semantic layer
++check: Symbols before RGB off
++check: semantic layer change respects RGB off
++check: RGB on restores active Numbers map
++check: final Base has no residual semantic colors
 diff --git a/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt b/app/tests/modifiers/rgb-renderer/mock/CMakeLists.txt
 new file mode 100644
 index 0000000..5192fbe
@@ -468,10 +493,10 @@ index 0000000..0fc457f
 +    required: true
 diff --git a/app/tests/modifiers/rgb-renderer/mock/led_strip.c b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
 new file mode 100644
-index 0000000..488b039
+index 0000000..a41bf77
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/mock/led_strip.c
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,290 @@
 +#include <stdlib.h>
 +#include <zephyr/device.h>
 +#include <zephyr/drivers/led_strip.h>
@@ -480,6 +505,8 @@ index 0000000..488b039
 +#include <drivers/behavior.h>
 +#include <zmk/behavior.h>
 +#include <zmk/events/position_state_changed.h>
++#include <zmk/events/layer_state_changed.h>
++#include <zmk/events/split_peripheral_layer_changed.h>
 +#include <zmk/hid.h>
 +#include <zmk/keymap.h>
 +#include <zmk/rgb_modifiers.h>
@@ -504,6 +531,52 @@ index 0000000..488b039
 +
 +enum { SHIFT = BIT(0), CTRL = BIT(1), ALT = BIT(2), ALTGR = BIT(3), GROUP_GUI = BIT(4) };
 +
++/* Independent expectations from the approved position/output inventory, not the RGB DTSI. */
++static const uint32_t expected_symbols[80] = {
++    [25] = 0x00FF00, [26] = 0x00FF00, [37] = 0x00FF00, [38] = 0x00FF00,
++    [49] = 0x00FF00, [50] = 0x00FF00, [67] = 0x00FF00, [68] = 0x00FF00,
++    [23] = 0xFF8000, [27] = 0xFF8000, [28] = 0xFF8000, [39] = 0xFF8000,
++    [42] = 0xFF8000, [43] = 0xFF8000, [45] = 0xFF8000, [47] = 0xFF8000,
++    [51] = 0xFF8000, [77] = 0xFF8000,
++    [22] = 0xFF00FF, [29] = 0xFF00FF, [34] = 0xFF00FF, [44] = 0xFF00FF,
++    [48] = 0xFF00FF, [62] = 0xFF00FF,
++    [24] = 0x00FFFF, [35] = 0x00FFFF, [36] = 0x00FFFF, [40] = 0x00FFFF,
++    [41] = 0x00FFFF, [58] = 0x00FFFF, [59] = 0x00FFFF, [60] = 0x00FFFF,
++    [61] = 0x00FFFF, [54] = 0x404040,
++};
++
++static const uint32_t expected_numbers[80] = {
++    [23] = 0x8000FF, [24] = 0x8000FF, [25] = 0x8000FF, [26] = 0x8000FF,
++    [27] = 0x8000FF, [35] = 0x8000FF, [36] = 0x8000FF, [37] = 0x8000FF,
++    [38] = 0x8000FF, [39] = 0x8000FF, [47] = 0x8000FF, [48] = 0x8000FF,
++    [29] = 0x00FFFF, [30] = 0x00FFFF, [31] = 0x00FFFF, [40] = 0x00FFFF,
++    [41] = 0x00FFFF, [42] = 0x00FFFF, [43] = 0x00FFFF, [59] = 0x00FFFF,
++    [60] = 0x00FFFF, [61] = 0x00FFFF,
++    [32] = 0xFF8000, [44] = 0xFF8000, [62] = 0xFF8000, [58] = 0xFFFF00,
++};
++
++static const uint32_t expected_workbench[80] = {
++    [23] = 0xFFFF00, [24] = 0xFFFF00, [25] = 0xFFFF00, [26] = 0xFFFF00,
++    [27] = 0xFFFF00, [35] = 0xFFFF00,
++    [36] = 0x00FF00, [37] = 0x00FF00,
++    [28] = 0x00FFFF, [29] = 0x00FFFF, [30] = 0x00FFFF, [31] = 0x00FFFF,
++    [32] = 0x00FFFF, [40] = 0x00FFFF, [41] = 0x00FFFF, [42] = 0x00FFFF,
++    [43] = 0x00FFFF, [44] = 0x00FFFF,
++    [47] = 0x8000FF, [48] = 0x8000FF, [49] = 0x8000FF, [50] = 0x8000FF,
++};
++
++static const uint32_t *expected_semantic;
++
++/* A real split central emits this notification after each keymap layer change. */
++static int native_layer_changed(const zmk_event_t *eh) {
++    raise_zmk_split_peripheral_layer_changed(
++        (struct zmk_split_peripheral_layer_changed){.layers = zmk_keymap_layer_state()});
++    return ZMK_EV_EVENT_BUBBLE;
++}
++
++ZMK_LISTENER(native_rgb_layers, native_layer_changed);
++ZMK_SUBSCRIPTION(native_rgb_layers, zmk_layer_state_changed);
++
 +static void check_frame(const char *name, uint8_t groups) {
 +    k_sleep(K_MSEC(30));
 +    for (int pixel = 0; pixel < ARRAY_SIZE(frame); pixel++) {
@@ -520,6 +593,9 @@ index 0000000..488b039
 +        } else if ((groups & GROUP_GUI) && (position == 35 || position == 44 || position == 55)) {
 +            color = 0xFFFF00;
 +        }
++        if (expected_semantic) {
++            color = expected_semantic[position];
++        }
 +        struct led_rgb expected = {
 +            .r = ((color >> 16) & 0xFF) * 100 / 255,
 +            .g = ((color >> 8) & 0xFF) * 100 / 255,
@@ -533,6 +609,12 @@ index 0000000..488b039
 +        }
 +    }
 +    LOG_INF("RGB check: %s", name);
++}
++
++static void check_semantic(const char *name, const uint32_t *expected) {
++    expected_semantic = expected;
++    check_frame(name, 0);
++    expected_semantic = NULL;
 +}
 +
 +static void position(uint32_t key, bool pressed) {
@@ -650,6 +732,57 @@ index 0000000..488b039
 +    check_frame("resync restores unchanged held snapshot", SHIFT);
 +    position(52, false);
 +    check_frame("release after resync", 0);
++
++    zmk_keymap_layer_activate(2);
++    check_semantic("Symbols exact map including transparent keys dark", expected_symbols);
++    position(38, true);
++    check_semantic("symbol key does not introduce Base modifier indication", expected_symbols);
++    position(38, false);
++    zmk_keymap_layer_activate(4);
++    check_semantic("Numbers overrides Symbols without lower color bleed", expected_numbers);
++    position(49, true);
++    check_semantic("disabled Number key stays dark", expected_numbers);
++    position(49, false);
++    zmk_keymap_layer_activate(5);
++    check_semantic("Workbench overrides Numbers and Symbols", expected_workbench);
++    position(36, true);
++    position(36, false);
++    check_semantic("Git macro leaves Workbench lighting unchanged", expected_workbench);
++    zmk_keymap_layer_deactivate(5);
++    check_semantic("release Workbench restores Numbers", expected_numbers);
++    zmk_keymap_layer_deactivate(4);
++    check_semantic("release Numbers restores Symbols", expected_symbols);
++    zmk_keymap_layer_activate(3);
++    check_frame("Navigation overrides Symbols and remains unlit", 0);
++    zmk_keymap_layer_deactivate(3);
++    check_semantic("release Navigation restores Symbols", expected_symbols);
++    for (int layer = 6; layer <= 8; layer++) {
++        zmk_keymap_layer_activate(layer);
++        check_frame("unrelated higher layer remains unlit", 0);
++        zmk_keymap_layer_deactivate(layer);
++        check_semantic("release unrelated layer restores Symbols", expected_symbols);
++    }
++    zmk_keymap_layer_deactivate(2);
++    check_frame("release Symbols restores idle Base", 0);
++    position(52, true);
++    check_frame("Base Shift before semantic layer", SHIFT);
++    zmk_keymap_layer_activate(4);
++    check_semantic("Numbers replaces held Base Shift indication", expected_numbers);
++    zmk_keymap_layer_deactivate(4);
++    check_frame("return to Base restores held Shift", SHIFT);
++    position(52, false);
++    check_frame("Base release after semantic layer", 0);
++
++    zmk_keymap_layer_activate(2);
++    check_semantic("Symbols before RGB off", expected_symbols);
++    zmk_rgb_underglow_off();
++    zmk_keymap_layer_activate(4);
++    check_frame("semantic layer change respects RGB off", 0);
++    zmk_rgb_underglow_on();
++    check_semantic("RGB on restores active Numbers map", expected_numbers);
++    zmk_keymap_layer_deactivate(4);
++    zmk_keymap_layer_deactivate(2);
++    check_frame("final Base has no residual semantic colors", 0);
 +    exit(0);
 +}
 +
@@ -679,16 +812,27 @@ index 0000000..cef6422
 +CONFIG_ZMK_RGB_UNDERGLOW_BRT_MAX=100
 diff --git a/app/tests/modifiers/rgb-renderer/native_posix_64.keymap b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
 new file mode 100644
-index 0000000..d1a6a6c
+index 0000000..8001f73
 --- /dev/null
 +++ b/app/tests/modifiers/rgb-renderer/native_posix_64.keymap
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +#include <dt-bindings/zmk/keys.h>
 +#include <dt-bindings/gpio/gpio.h>
 +#include <behaviors.dtsi>
 +
 +#define LAYER_Base 0
++#define LAYER_Lower 1
++#define LAYER_Symbols 2
++#define LAYER_Navigation 3
++#define LAYER_Numbers 4
++#define LAYER_Workbench 5
++#define LAYER_Mouse 6
++#define LAYER_Magic 7
++#define LAYER_Factory 8
 +#include "modifier-lighting.dtsi"
++
++#define TRANS_ROW &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
++#define TRANS_LAYER TRANS_ROW TRANS_ROW TRANS_ROW TRANS_ROW TRANS_ROW TRANS_ROW TRANS_ROW TRANS_ROW
 +
 +/delete-node/ &ug_b2;
 +/delete-node/ &ug_b4;
@@ -717,7 +861,7 @@ index 0000000..d1a6a6c
 +    };
 +    keymap {
 +        compatible = "zmk,keymap";
-+        base {
++        layer_Base {
 +            bindings = <
 +                &kp LS(A) &none &none &none &none &none &none &none &none &none
 +                &none &none &none &none &none &none &none &none &none &none
@@ -729,20 +873,19 @@ index 0000000..d1a6a6c
 +                &none &mo 1 &mo 1 &none &none &none &none &none &none &none
 +            >;
 +        };
-+        higher {
-+            bindings = <
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+                &trans &trans &trans &trans &trans &trans &trans &trans &trans &trans
-+            >;
-+        };
++        layer_Lower { bindings = <TRANS_LAYER>; };
++        layer_Symbols { bindings = <TRANS_LAYER>; };
++        layer_Navigation { bindings = <TRANS_LAYER>; };
++        layer_Numbers { bindings = <TRANS_LAYER>; };
++        layer_Workbench { bindings = <TRANS_LAYER>; };
++        layer_Mouse { bindings = <TRANS_LAYER>; };
++        layer_Magic { bindings = <TRANS_LAYER>; };
++        layer_Factory { bindings = <TRANS_LAYER>; };
 +    };
++
 +};
++
++#include "semantic-bindings.dtsi"
 +
 +&kscan {
 +    rows = <1>;

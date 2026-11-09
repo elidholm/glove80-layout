@@ -37,7 +37,7 @@ jobs:
       - name: Build Glove80 combined firmware
         run: nix-build config -o combined
 
-      - name: Test physical-key indication on both LED maps
+      - name: Test Base indication and semantic lighting on both LED maps
         run: |
           nix-build tests --argstr half lh --no-out-link
           nix-build tests --argstr half rh --no-out-link

@@ -15,7 +15,7 @@ To update the repository after changing the layout:
 2. In the editor, export the keymap DTSI and JSON.
 3. Replace `config/glove80.keymap` and `config/keymap.json` with the matching exports.
 4. Confirm that `HID_POINTING` remains enabled in the editor. Keep `CONFIG_ZMK_POINTING=y` and `CONFIG_EXPERIMENTAL_RGB_LAYER=y` in `config/glove80.conf`.
-5. Review `docs/layers.md` if you changed layer access, key assignments, modifiers, macros, or settings.
+5. Review `docs/layers.md` and the physical-position color maps in `config/modifier-lighting.dtsi` if you changed layer access, key assignments, modifiers, macros, or settings.
 6. Build and test the new firmware before treating it as a recovery version.
 
 Do not hand-edit the editor JSON schema. The editor marks that format experimental and does not guarantee that old JSON will always import.
@@ -37,6 +37,10 @@ The community base is `22d6941d055bf05f006c9d4d7088e9564d31ba3a` from [moergo-sc
 Primary implementation references at that revision: [conditional RGB indicators](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behaviors/behavior_underglow_indicators.c), [physical event dispatch](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/event_manager.c), [global split behavior dispatch](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behavior.c), [Bluetooth payload definition](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/include/zmk/split/bluetooth/service.h), and the [left](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_lh.dts)/[right](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/boards/arm/glove80/glove80_rh.dts) LED lookup tables.
 
 The patch also refreshes layer colors on RGB-on/effect selection so a trigger already held is visible immediately. Explicit off retains PR36's layer-enable guard; existing brightness/status/battery rendering remains in place. Updating the base requires reviewing/reapplying the patch and rerunning tests, not just changing the revision text.
+
+Numbers, Symbols, and Workbench use the same revision's existing static `&ug` bindings and layer precedence; semantic lighting requires no further production firmware changes. Their maps live alongside the Base map in the existing include. The [approved inventory](layers.md#semantic-layer-lighting) records actual Swedish outputs and deliberately keeps inherited keys dark.
+
+Static-map and precedence references: [RGB layer renderer](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/rgb_underglow.c), [constant color behavior](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/behaviors/behavior_underglow_color.c), and [keymap fallback/release handling](https://github.com/moergo-sc/zmk/blob/22d6941d055bf05f006c9d4d7088e9564d31ba3a/app/src/keymap.c). Swedish meanings were checked with libxkbcommon against standard `se(basic)` plus Compose, including macro expansion; this is not physical host-input validation.
 
 ### Fixes after the first hardware test
 
@@ -63,7 +67,7 @@ nix-build tests --argstr half lh --no-out-link
 nix-build tests --argstr half rh --no-out-link
 ```
 
-These compile real ZMK event/hold-tap/renderer code and check physical taps, every trigger and group, overlapping keys, release order, Base-only gating, macro exclusion, RGB-off/re-enable, and snapshot serialization/lookup. The test LED device and emulated power GPIO are not physical keyboard tests. The tests/fixtures are carried inside the firmware patch.
+These compile real ZMK event/hold-tap/renderer code and check physical taps, every trigger and group, overlapping keys, release order, Base-only gating, macro exclusion, RGB-off/re-enable, and snapshot serialization/lookup. The semantic tests import the actual target-layer bindings and macro definitions from the editor export and check all LED values against separate, manually specified expectations from the approved inventory. They cover all three maps, inherited/disabled keys, overlapping layers, unrelated layers, and restoration of Base. The native fixture mirrors the split central's layer-change notification; it does not emulate Bluetooth radio delivery. The test LED device and emulated power GPIO are not physical keyboard tests. The tests/fixtures are carried inside the firmware patch.
 
 ## Flash both halves
 
@@ -99,6 +103,20 @@ Select layer RGB using the [existing controls](layers.md#modifier-lighting), the
 6. With the host set to Swedish, verify shifted letters and AltGr+2 producing `@` in a text field. `evtest` reports keycodes, not the host's character translation.
 
 Physical LED positions, Bluetooth reconnection, Swedish text output, and editor round-tripping must be checked on the actual device/editor before calling this firmware known-good. No automated test establishes those facts.
+
+## Semantic-lighting hardware acceptance
+
+Flash the same new combined UF2 to both halves. Select layer RGB once, release Magic, and let its status display finish before judging colors. Use `sudo evtest` without grabbing the keyboard, plus a plain text editor with standard Swedish input; do not test command macros at a shell prompt.
+
+1. Hold LH T6 (Numbers). Confirm cyan digits, orange `/`/`*`/`-`, a yellow decimal point, and violet F1–F12 positions. Inherited top-row numbers and disabled LH C3/C2/C1 R5 stay dark. Type representative digits and punctuation; verify F-key events in `evtest`.
+2. Hold LH T2 (Symbols). Compare one pair of delimiters, an operator, punctuation, and quotes/escaping against the inventory. Verify `[`/`]`, backslash, and `->` in the text editor. RH C2R3 is a dead grave: followed by Space it produces a backtick. LH C6R4's macro produces the literal backtick itself; `Circumflex`/`Tilde` similarly produce literal `^`/`~`.
+3. Hold RH T6 (Workbench). Check green Git, cyan Docker, yellow Make/Pytest, and violet F13–F16. Type one prefix from each family into the text editor; it must retain its trailing space and never press Enter. `DockerRun` should still show the existing `docker run -rm `; do not execute it as a test.
+4. Hold combinations of the three layer keys: Workbench outranks Numbers, which outranks Symbols. Release the highest layer and confirm the remaining layer's complete map returns with no lower-map color bleed. Enter Navigation/Mouse/Magic as reachable and confirm they retain their prior lighting/status behavior.
+5. Hold a Base thumb Shift, enter Numbers, then release Numbers while keeping Shift held: the semantic map replaces cyan Shift indication and Base indication returns afterward. Release Shift and confirm there are no residual semantic colors.
+6. Turn RGB off, change target layers, and confirm they do not wake the LEDs. Re-enable RGB while a target layer remains held; its current map should appear. Check both halves, brightness controls, and status overlays.
+7. At your usual brightness and room lighting, check that digits versus decimal, operators versus quoting, and Git versus Docker versus build commands are distinguishable. Verify the dim-white return-to-Base key is visible but subdued. Record any confusing pair for palette adjustment; hex values and native frame tests cannot establish perceived color separation.
+
+These are manual acceptance steps, not completed hardware results. Battery protections and physical color rendition remain subject to device testing.
 
 ## Mouse support and first-use checks
 

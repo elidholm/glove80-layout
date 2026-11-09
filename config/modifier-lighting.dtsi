@@ -43,6 +43,14 @@
 #define MI_ALTGR &ug_altgr 0x000000 0xFF00FF
 #define MI_GUI &ug_gui 0x000000 0xFFFF00
 
+#define SI_CYAN &ug 0x00FFFF
+#define SI_ORANGE &ug 0xFF8000
+#define SI_YELLOW &ug 0xFFFF00
+#define SI_VIOLET &ug 0x8000FF
+#define SI_GREEN &ug 0x00FF00
+#define SI_MAGENTA &ug 0xFF00FF
+#define SI_CONTROL &ug 0x404040
+
 #define MODIFIER_RGB_MAP \
     MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                                       MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
     MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                         MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF \
@@ -59,6 +67,42 @@
             bindings = <MODIFIER_RGB_MAP>;
             fade-delay = <(-1)>;
         };
+        semantic_symbols {
+            layer-id = <LAYER_Symbols>;
+            bindings = <
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                                      MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                SI_MAGENTA SI_ORANGE SI_CYAN SI_GREEN SI_GREEN SI_ORANGE         SI_ORANGE SI_MAGENTA MI_OFF MI_OFF MI_OFF MI_OFF
+                SI_MAGENTA SI_CYAN SI_CYAN SI_GREEN SI_GREEN SI_ORANGE            SI_CYAN SI_CYAN SI_ORANGE SI_ORANGE SI_MAGENTA SI_ORANGE
+                MI_OFF SI_ORANGE SI_MAGENTA SI_GREEN SI_GREEN SI_ORANGE MI_OFF MI_OFF SI_CONTROL MI_OFF MI_OFF MI_OFF SI_CYAN SI_CYAN SI_CYAN SI_CYAN SI_MAGENTA MI_OFF
+                MI_OFF MI_OFF MI_OFF SI_GREEN SI_GREEN        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF SI_ORANGE MI_OFF MI_OFF
+            >;
+            fade-delay = <(-1)>;
+        };
+        semantic_numbers {
+            layer-id = <LAYER_Numbers>;
+            bindings = <
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                                      MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF SI_VIOLET SI_VIOLET SI_VIOLET SI_VIOLET SI_VIOLET           MI_OFF SI_CYAN SI_CYAN SI_CYAN SI_ORANGE MI_OFF
+                MI_OFF SI_VIOLET SI_VIOLET SI_VIOLET SI_VIOLET SI_VIOLET           SI_CYAN SI_CYAN SI_CYAN SI_CYAN SI_ORANGE MI_OFF
+                MI_OFF SI_VIOLET SI_VIOLET MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF SI_YELLOW SI_CYAN SI_CYAN SI_CYAN SI_ORANGE MI_OFF
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+            >;
+            fade-delay = <(-1)>;
+        };
+        semantic_workbench {
+            layer-id = <LAYER_Workbench>;
+            bindings = <
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                                      MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF                        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF SI_YELLOW SI_YELLOW SI_YELLOW SI_YELLOW SI_YELLOW           SI_CYAN SI_CYAN SI_CYAN SI_CYAN SI_CYAN MI_OFF
+                MI_OFF SI_YELLOW SI_GREEN SI_GREEN MI_OFF MI_OFF                  SI_CYAN SI_CYAN SI_CYAN SI_CYAN SI_CYAN MI_OFF
+                MI_OFF SI_VIOLET SI_VIOLET SI_VIOLET SI_VIOLET MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+                MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF        MI_OFF MI_OFF MI_OFF MI_OFF MI_OFF
+            >;
+            fade-delay = <(-1)>;
+        };
     };
 };
 
@@ -69,3 +113,10 @@
 #undef MI_ALT
 #undef MI_ALTGR
 #undef MI_GUI
+#undef SI_CYAN
+#undef SI_ORANGE
+#undef SI_YELLOW
+#undef SI_VIOLET
+#undef SI_GREEN
+#undef SI_MAGENTA
+#undef SI_CONTROL

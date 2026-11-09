@@ -10,6 +10,14 @@ let
     chmod -R u+w $out
     cp ${../config/modifier-lighting.dtsi} $out/app/tests/${test}/modifier-lighting.dtsi
     {
+      sed -n '/^\/\* Automatically generated macro definitions \*\//,/^\/\* Automatically generated behavior definitions \*\//p' ${../config/glove80.keymap}
+      echo '/ { keymap {'
+      for layer in Symbols Numbers Workbench; do
+        sed -n "/^        layer_$layer {/,/^        };$/p" ${../config/glove80.keymap}
+      done
+      echo '}; };'
+    } > $out/app/tests/${test}/semantic-bindings.dtsi
+    {
       echo '/ { underglow-layer {'
       sed -n '/pixel-lookup =/,/;/p' $out/app/boards/arm/glove80/glove80_${half}.dts
       echo '}; };'
